@@ -103,7 +103,7 @@ namespace Cobalt {
 		}
 
 		private Scan schedule_scan (string[] uuids, Cancellable? cancellable) {
-			var scan = new Scan (uuids, cancellable);
+			var scan = new Scan (uuids, cancellable, this);
 			pending_scans.offer_tail (scan);
 
 			ulong state_handler = 0;
@@ -233,18 +233,29 @@ namespace Cobalt {
 				ENDED
 			}
 
+			public PeripheralManager manager {
+				get;
+				construct;
+			}
+
 			public signal void match (Peripheral peripheral);
 
 			private ulong cancel_handler = 0;
 
-			public Scan (string[] uuids, Cancellable? cancellable) {
-				Object (uuids: uuids, cancellable: cancellable);
+			public Scan (string[] uuids, Cancellable? cancellable, PeripheralManager manager) {
+				Object (
+					uuids: uuids,
+					cancellable: cancellable,
+					manager: manager
+				);
 			}
 
 			construct {
 				if (cancellable != null) {
 					cancel_handler = cancellable.connect (() => {
-						end ();
+						manager.schedule (() => {
+							end ();
+						});
 					});
 				}
 			}
@@ -272,7 +283,7 @@ namespace Cobalt {
 			}
 		}
 
-		private void schedule (owned ScheduledFunc func) {
+		internal void schedule (owned ScheduledFunc func) {
 			var manager = this;
 			Idle.add (() => {
 				func ();
@@ -281,7 +292,7 @@ namespace Cobalt {
 			});
 		}
 
-		private delegate void ScheduledFunc ();
+		internal delegate void ScheduledFunc ();
 	}
 
 	public class Peripheral : Object {
@@ -298,6 +309,8 @@ namespace Cobalt {
 			}
 		}
 
+		private Gee.ArrayQueue<ServiceDiscovery> pending_discoveries = new Gee.ArrayQueue<ServiceDiscovery> ();
+
 		public Peripheral (PeripheralManager manager) {
 			Object (manager: manager);
 		}
@@ -306,6 +319,148 @@ namespace Cobalt {
 
 		public async void ensure_connected (Cancellable? cancellable = null) throws Error {
 			yield manager.establish_connection (this, cancellable);
+		}
+
+		public async Gee.ArrayList<Service> discover_services (string[]? uuids = null, Cancellable? cancellable = null) throws Error {
+			var discovery = new ServiceDiscovery (uuids, cancellable, manager);
+			pending_discoveries.offer_tail (discovery);
+
+			if (pending_discoveries.peek_head () == discovery)
+				process_service_discovery_request (discovery);
+
+			return yield discovery.future.wait_async ();
+		}
+
+		private void process_next_service_discovery_request () {
+			var discovery = pending_discoveries.peek_head ();
+			if (discovery != null)
+				process_service_discovery_request (discovery);
+		}
+
+		private void process_service_discovery_request (ServiceDiscovery discovery) {
+			_start_service_discovery (discovery.uuids);
+		}
+
+		public extern void _start_service_discovery (string[]? uuids);
+
+		public void _on_service_discovery_success (owned Gee.ArrayList<Service> services) {
+			manager.schedule (() => {
+				var discovery = pending_discoveries.poll_head ();
+				discovery.resolve (services);
+
+				process_next_service_discovery_request ();
+			});
+		}
+
+		public void _on_service_discovery_failure (string error_description) {
+			manager.schedule (() => {
+				var discovery = pending_discoveries.poll_head ();
+				discovery.reject (new IOError.FAILED ("%s", error_description));
+
+				process_next_service_discovery_request ();
+			});
+		}
+
+		private class ServiceDiscovery : Object {
+			public string[]? uuids {
+				get;
+				construct;
+			}
+
+			public Cancellable? cancellable {
+				get;
+				construct;
+			}
+
+			public Gee.Future<Gee.ArrayList<Service>> future {
+				get {
+					return promise.future;
+				}
+			}
+
+			public PeripheralManager manager {
+				get;
+				construct;
+			}
+
+			private Gee.Promise<Gee.ArrayList<Service>> promise = new Gee.Promise<Gee.ArrayList<Service>> ();
+
+			private ulong cancel_handler = 0;
+
+			public ServiceDiscovery (string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
+				Object (
+					uuids: uuids,
+					cancellable: cancellable,
+					manager: manager
+				);
+			}
+
+			construct {
+				if (cancellable != null) {
+					cancel_handler = cancellable.connect (() => {
+						manager.schedule (() => {
+							if (!promise.future.ready) {
+								promise.set_exception (new IOError.CANCELLED ("Cancelled"));
+							}
+						});
+					});
+				}
+			}
+
+			~ServiceDiscovery () {
+				if (cancellable != null)
+					cancellable.disconnect (cancel_handler);
+			}
+
+			public void resolve (Gee.ArrayList<Service> services) {
+				promise.set_value (services);
+			}
+
+			public void reject (Error error) {
+				promise.set_exception (error);
+			}
+		}
+	}
+
+	public abstract class Attribute : Object {
+		public void* handle {
+			get;
+			construct;
+		}
+
+		public string uuid {
+			get;
+			construct;
+		}
+
+		~Attribute () {
+			_close (handle);
+		}
+
+		public extern static void _close (void* handle);
+	}
+
+	public class Service : Attribute {
+		public Gee.ArrayList<Characteristic> characteristics {
+			get;
+			construct;
+		}
+
+		public Service (void* handle, string uuid, Gee.ArrayList<Characteristic> characteristics) {
+			Object (
+				handle: handle,
+				uuid: uuid,
+				characteristics: characteristics
+			);
+		}
+	}
+
+	public class Characteristic : Attribute {
+		public Characteristic (void* handle, string uuid) {
+			Object (
+				handle: handle,
+				uuid: uuid
+			);
 		}
 	}
 }

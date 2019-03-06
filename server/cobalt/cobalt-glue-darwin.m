@@ -2,6 +2,9 @@
 
 #import <CoreBluetooth/CoreBluetooth.h>
 
+static GeeArrayList *cobalt_parse_characteristic_array(NSArray<CBCharacteristic *> *characteristics);
+static NSArray<CBUUID *> *cobalt_strv_to_uuid_array(gchar **uuids, int uuidsLength);
+
 @interface CobaltPeripheralManagerHandle : NSObject <CBCentralManagerDelegate> {
   @public CobaltPeripheralManager *wrapper;
   @public CBCentralManager *impl;
@@ -73,15 +76,15 @@
   _cobalt_peripheral_manager_on_connect_success(wrapper, (__bridge gpointer) peripheral);
 }
 
-- (void)centralManager:(CBCentralManager *)central
+-     (void)centralManager:(CBCentralManager *)central
 didFailToConnectPeripheral:(CBPeripheral *)peripheral
-                 error:(NSError *)error {
+                     error:(NSError *)error {
   _cobalt_peripheral_manager_on_connect_failure(wrapper, (__bridge gpointer) peripheral, error.localizedDescription.UTF8String);
 }
 
-- (void)centralManager:(CBCentralManager *)central
+-  (void)centralManager:(CBCentralManager *)central
 didDisconnectPeripheral:(CBPeripheral *)peripheral
-                 error:(NSError *)error {
+                  error:(NSError *)error {
   _cobalt_peripheral_manager_on_disconnect(wrapper, (__bridge gpointer) peripheral, error.localizedDescription.UTF8String);
 }
 
@@ -112,10 +115,7 @@ void _cobalt_peripheral_manager_start_scan(CobaltPeripheralManager *wrapper, gch
   @autoreleasepool {
     CobaltPeripheralManagerHandle *managerHandle = (__bridge CobaltPeripheralManagerHandle *) wrapper->handle;
 
-    NSMutableArray *uuidValues = [NSMutableArray arrayWithCapacity:uuidsLength];
-    for (int i = 0; i != uuidsLength; i++) {
-      [uuidValues addObject:[CBUUID UUIDWithString:[NSString stringWithUTF8String:uuids[i]]]];
-    }
+    NSArray *uuidValues = cobalt_strv_to_uuid_array(uuids, uuidsLength);
 
     dispatch_async(dispatch_get_main_queue(), ^{
       [managerHandle startScan:uuidValues];
@@ -166,9 +166,35 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
     impl = theImpl;
 
     wrapper->handle = (__bridge_retained gpointer) self;
+
+    impl.delegate = self;
   }
 
   return self;
+}
+
+- (void)startServiceDiscovery:(NSArray<CBUUID *> *)serviceUUIDs {
+  [impl discoverServices:serviceUUIDs];
+}
+
+-  (void)peripheral:(CBPeripheral *)peripheral
+didDiscoverServices:(NSError *)error {
+  if (error == nil) {
+    GeeArrayList *services = gee_array_list_new(COBALT_TYPE_SERVICE,
+        (GBoxedCopyFunc) g_object_ref, (GDestroyNotify) g_object_unref,
+        NULL, NULL, NULL);
+
+    for (CBService *handle in peripheral.services) {
+      const gchar *uuid = handle.UUID.UUIDString.UTF8String;
+      GeeArrayList *characteristics = cobalt_parse_characteristic_array(handle.characteristics);
+      CobaltService *service = cobalt_service_new((__bridge_retained gpointer) handle, uuid, characteristics);
+      gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(services), service);
+    }
+
+    _cobalt_peripheral_on_service_discovery_success(wrapper, services);
+  } else {
+    _cobalt_peripheral_on_service_discovery_failure(wrapper, error.localizedDescription.UTF8String);
+  }
 }
 
 @end
@@ -176,4 +202,50 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
 gpointer _cobalt_peripheral_get_implementation(CobaltPeripheral *wrapper) {
   CobaltPeripheralHandle *handle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
   return (__bridge gpointer) handle->impl;
+}
+
+void _cobalt_peripheral_start_service_discovery(CobaltPeripheral *wrapper, gchar **uuids, int uuidsLength) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    NSArray *uuidValues = cobalt_strv_to_uuid_array(uuids, uuidsLength);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [peripheralHandle startServiceDiscovery:uuidValues];
+    });
+  }
+}
+
+void _cobalt_attribute_close(gpointer opaqueHandle) {
+  @autoreleasepool {
+    CBService *handle = (__bridge_transfer CBService *) opaqueHandle;
+    handle = nil;
+  }
+}
+
+static GeeArrayList *
+cobalt_parse_characteristic_array(NSArray<CBCharacteristic *> *characteristics) {
+  GeeArrayList *result = gee_array_list_new(COBALT_TYPE_CHARACTERISTIC,
+      (GBoxedCopyFunc) g_object_ref, (GDestroyNotify) g_object_unref,
+      NULL, NULL, NULL);
+
+  for (CBCharacteristic *handle in characteristics) {
+    const gchar *uuid = handle.UUID.UUIDString.UTF8String;
+    CobaltCharacteristic *characteristic = cobalt_characteristic_new((__bridge_retained gpointer) handle, uuid);
+    gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(result), characteristic);
+  }
+
+  return result;
+}
+
+static NSArray<CBUUID *> *
+cobalt_strv_to_uuid_array(gchar **uuids, int uuidsLength) {
+  if (uuids == NULL)
+    return nil;
+
+  NSMutableArray *result = [NSMutableArray arrayWithCapacity:uuidsLength];
+  for (int i = 0; i != uuidsLength; i++) {
+    [result addObject:[CBUUID UUIDWithString:[NSString stringWithUTF8String:uuids[i]]]];
+  }
+  return result;
 }

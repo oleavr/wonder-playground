@@ -61,10 +61,28 @@ namespace WonderPlayground {
 					"AF237777-879D-6186-1F49-DECA0E85D9C1",
 					"AF237778-879D-6186-1F49-DECA0E85D9C1",
 				}, -1, cancellable);
-				printerr ("found peripheral: %p, connecting...\n", peripheral);
+				print ("found peripheral: %p, connecting...\n", peripheral);
 				yield peripheral.ensure_connected ();
 
 				print ("connected!\n");
+
+				var services = yield peripheral.discover_services (new string[] {
+					"AF237777-879D-6186-1F49-DECA0E85D9C1",
+					"AF237778-879D-6186-1F49-DECA0E85D9C1",
+				}, cancellable);
+				uint service_index = 0;
+				foreach (var service in services) {
+					print ("services[%u]: \"%s\"\n", service_index, service.uuid);
+
+					uint characteristic_index = 0;
+					foreach (var characteristic in service.characteristics) {
+						print ("\tcharacteristics[%u]: \"%s\"\n", characteristic_index, characteristic.uuid);
+
+						characteristic_index++;
+					}
+
+					service_index++;
+				}
 
 				started = true;
 			} catch (Error e) {
