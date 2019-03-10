@@ -325,7 +325,7 @@ namespace Cobalt {
 
 		public extern void* _get_implementation ();
 
-		public async void ensure_connected (Cancellable? cancellable = null) throws Error {
+		public async void establish_connection (Cancellable? cancellable = null) throws Error {
 			yield manager.establish_connection (this, cancellable);
 		}
 

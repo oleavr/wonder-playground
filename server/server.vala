@@ -62,7 +62,8 @@ namespace WonderPlayground {
 					"AF237778-879D-6186-1F49-DECA0E85D9C1",
 				}, -1, cancellable);
 				print ("found peripheral: %p, connecting...\n", peripheral);
-				yield peripheral.ensure_connected ();
+
+				yield peripheral.establish_connection ();
 
 				print ("connected!\n");
 
