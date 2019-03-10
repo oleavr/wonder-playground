@@ -91,7 +91,21 @@ namespace WonderPlayground {
 							var val = yield characteristic.read_value ();
 							print ("\t\tvalue: %u bytes\n", (uint) val.get_size ());
 						} catch (Error e) {
-							print ("\t\t(unable to read value: %s)\n", e.message);
+							print ("\t\t(unable to read value: \"%s\")\n", e.message);
+						}
+
+						if (characteristic.uuid == "AF230002-879D-6186-1F49-DECA0E85D9C1") {
+							try {
+								var val = new Bytes (new uint8[] {
+									0x03, 0xff, 0x00, 0x00, 0x0b, 0xff, 0x00, 0x00,
+									0x0c, 0xff, 0x00, 0x00, 0x30, 0xff, 0x00, 0x00,
+								});
+								print ("\t\t(writing %u bytes)\n", (uint) val.get_size ());
+								yield characteristic.write_value (val, WITHOUT_RESPONSE, cancellable);
+								print ("\t\t(wrote %u bytes)\n", (uint) val.get_size ());
+							} catch (Error e) {
+								print ("\t\t(unable to write value: \"%s\")\n", e.message);
+							}
 						}
 
 						var descriptors = yield characteristic.discover_descriptors ();

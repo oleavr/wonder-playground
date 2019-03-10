@@ -317,6 +317,7 @@ namespace Cobalt {
 		private Gee.HashMap<void *, CharacteristicDiscovery> characteristic_discoveries = new Gee.HashMap<void *, CharacteristicDiscovery> ();
 		private Gee.HashMap<void *, DescriptorDiscovery> descriptor_discoveries = new Gee.HashMap<void *, DescriptorDiscovery> ();
 		private Gee.HashMap<void *, CharacteristicReadRequest> characteristic_reads = new Gee.HashMap<void *, CharacteristicReadRequest> ();
+		private Gee.HashMap<void *, CharacteristicWriteRequest> characteristic_writes = new Gee.HashMap<void *, CharacteristicWriteRequest> ();
 
 		public Peripheral (PeripheralManager manager) {
 			Object (manager: manager);
@@ -473,6 +474,34 @@ namespace Cobalt {
 				}
 			});
 		}
+
+		internal void process_characteristic_write_request (CharacteristicWriteRequest request) {
+			var characteristic = request.characteristic;
+
+			characteristic_writes[characteristic.handle] = request;
+
+			_start_characteristic_write (characteristic, request.val, request.write_type);
+		}
+
+		public extern void _start_characteristic_write (Characteristic characteristic, Bytes val, Characteristic.WriteType write_type);
+
+		public void _on_characteristic_value_write_success (void* characteristic_impl) {
+			manager.schedule (() => {
+				CharacteristicWriteRequest request;
+				if (characteristic_writes.unset (characteristic_impl, out request)) {
+					request.resolve (true);
+				}
+			});
+		}
+
+		public void _on_characteristic_value_write_failure (void* characteristic_impl, string error_description) {
+			manager.schedule (() => {
+				CharacteristicWriteRequest request;
+				if (characteristic_writes.unset (characteristic_impl, out request)) {
+					request.reject (new IOError.FAILED ("%s", error_description));
+				}
+			});
+		}
 	}
 
 	public abstract class Attribute : Object {
@@ -559,8 +588,14 @@ namespace Cobalt {
 			construct;
 		}
 
-		private Gee.ArrayQueue<CharacteristicReadRequest> read_requests = new Gee.ArrayQueue<CharacteristicReadRequest> ();
+		public enum WriteType {
+			WITH_RESPONSE,
+			WITHOUT_RESPONSE
+		}
+
 		private Gee.ArrayQueue<DescriptorDiscovery> descriptor_discoveries = new Gee.ArrayQueue<DescriptorDiscovery> ();
+		private Gee.ArrayQueue<CharacteristicReadRequest> read_requests = new Gee.ArrayQueue<CharacteristicReadRequest> ();
+		private Gee.ArrayQueue<CharacteristicWriteRequest> write_requests = new Gee.ArrayQueue<CharacteristicWriteRequest> ();
 
 		public Characteristic (void* handle, string uuid, Peripheral peripheral) {
 			Object (
@@ -568,6 +603,27 @@ namespace Cobalt {
 				uuid: uuid,
 				peripheral: peripheral
 			);
+		}
+
+		public async Gee.ArrayList<Descriptor> discover_descriptors (Cancellable? cancellable = null) throws Error {
+			var discovery = new DescriptorDiscovery (this, cancellable);
+			descriptor_discoveries.offer_tail (discovery);
+
+			discovery.completed.connect (() => {
+				descriptor_discoveries.poll_head ();
+				process_next_descriptor_discovery ();
+			});
+
+			if (descriptor_discoveries.peek_head () == discovery)
+				peripheral.process_descriptor_discovery (discovery);
+
+			return yield discovery.wait_async ();
+		}
+
+		private void process_next_descriptor_discovery () {
+			var discovery = descriptor_discoveries.peek_head ();
+			if (discovery != null)
+				peripheral.process_descriptor_discovery (discovery);
 		}
 
 		public async Bytes read_value (Cancellable? cancellable = null) throws Error {
@@ -591,25 +647,25 @@ namespace Cobalt {
 				peripheral.process_characteristic_read_request (request);
 		}
 
-		public async Gee.ArrayList<Descriptor> discover_descriptors (Cancellable? cancellable = null) throws Error {
-			var discovery = new DescriptorDiscovery (this, cancellable);
-			descriptor_discoveries.offer_tail (discovery);
+		public async void write_value (Bytes val, WriteType write_type, Cancellable? cancellable = null) throws Error {
+			var request = new CharacteristicWriteRequest (this, val, write_type, cancellable);
+			write_requests.offer_tail (request);
 
-			discovery.completed.connect (() => {
-				descriptor_discoveries.poll_head ();
-				process_next_descriptor_discovery ();
+			request.completed.connect (() => {
+				write_requests.poll_head ();
+				process_next_write_request ();
 			});
 
-			if (descriptor_discoveries.peek_head () == discovery)
-				peripheral.process_descriptor_discovery (discovery);
+			if (write_requests.peek_head () == request)
+				peripheral.process_characteristic_write_request (request);
 
-			return yield discovery.wait_async ();
+			yield request.wait_async ();
 		}
 
-		private void process_next_descriptor_discovery () {
-			var discovery = descriptor_discoveries.peek_head ();
-			if (discovery != null)
-				peripheral.process_descriptor_discovery (discovery);
+		private void process_next_write_request () {
+			var request = write_requests.peek_head ();
+			if (request != null)
+				peripheral.process_characteristic_write_request (request);
 		}
 	}
 
@@ -664,6 +720,21 @@ namespace Cobalt {
 		}
 	}
 
+	private class DescriptorDiscovery : Request<Gee.ArrayList<Descriptor>> {
+		public Characteristic characteristic {
+			get;
+			construct;
+		}
+
+		public DescriptorDiscovery (Characteristic characteristic, Cancellable? cancellable) {
+			Object (
+				characteristic: characteristic,
+				cancellable: cancellable,
+				manager: characteristic.peripheral.manager
+			);
+		}
+	}
+
 	private class CharacteristicReadRequest : Request<Bytes> {
 		public Characteristic characteristic {
 			get;
@@ -679,15 +750,27 @@ namespace Cobalt {
 		}
 	}
 
-	private class DescriptorDiscovery : Request<Gee.ArrayList<Descriptor>> {
+	private class CharacteristicWriteRequest : Request<bool> {
 		public Characteristic characteristic {
 			get;
 			construct;
 		}
 
-		public DescriptorDiscovery (Characteristic characteristic, Cancellable? cancellable) {
+		public Bytes val {
+			get;
+			construct;
+		}
+
+		public Characteristic.WriteType write_type {
+			get;
+			construct;
+		}
+
+		public CharacteristicWriteRequest (Characteristic characteristic, Bytes val, Characteristic.WriteType write_type, Cancellable? cancellable) {
 			Object (
 				characteristic: characteristic,
+				val: val,
+				write_type: write_type,
 				cancellable: cancellable,
 				manager: characteristic.peripheral.manager
 			);

@@ -196,6 +196,18 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
   [impl readValueForCharacteristic:characteristic];
 }
 
+- (void)startCharacteristicWrite:(CBCharacteristic *)characteristic
+                           value:(NSData *)data
+                            type:(CBCharacteristicWriteType)type {
+  [impl writeValue:data
+ forCharacteristic:characteristic
+              type:type];
+
+  if (type == CBCharacteristicWriteWithoutResponse) {
+    _cobalt_peripheral_on_characteristic_value_write_success(wrapper, (__bridge gpointer) characteristic);
+  }
+}
+
 -  (void)peripheral:(CBPeripheral *)peripheral
 didDiscoverServices:(NSError *)error {
   if (error == nil) {
@@ -286,6 +298,17 @@ didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
   }
 }
 
+- (void)peripheral:(CBPeripheral *)peripheral
+didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
+                         error:(NSError *)error {
+  NSLog(@"didWriteValueForCharacteristic error=%@", error);
+  if (error == nil) {
+    _cobalt_peripheral_on_characteristic_value_write_success(wrapper, (__bridge gpointer) characteristic);
+  } else {
+    _cobalt_peripheral_on_characteristic_value_write_failure(wrapper, (__bridge gpointer) characteristic, error.localizedDescription.UTF8String);
+  }
+}
+
 @end
 
 gpointer _cobalt_peripheral_get_implementation(CobaltPeripheral *wrapper) {
@@ -353,6 +376,24 @@ void _cobalt_peripheral_start_characteristic_read(CobaltPeripheral *wrapper, Cob
 
     dispatch_async(dispatch_get_main_queue(), ^{
       [peripheralHandle startCharacteristicRead:characteristic];
+    });
+  }
+}
+
+void _cobalt_peripheral_start_characteristic_write(CobaltPeripheral *wrapper, CobaltCharacteristic *characteristicWrapper, GBytes *val, CobaltCharacteristicWriteType write_type) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    CBCharacteristic *characteristic = (__bridge CBCharacteristic *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(characteristicWrapper));
+    gsize val_size;
+    gconstpointer val_data = g_bytes_get_data(val, &val_size);
+    NSData *data = [NSData dataWithBytes:val_data
+                                  length:val_size];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [peripheralHandle startCharacteristicWrite:characteristic
+                                           value:data
+                                            type:(CBCharacteristicWriteType) write_type];
     });
   }
 }
