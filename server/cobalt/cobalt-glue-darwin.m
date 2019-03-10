@@ -261,7 +261,8 @@ didDiscoverCharacteristicsForService:(CBService *)service
 
     for (CBCharacteristic *handle in service.characteristics) {
       const gchar *uuid = handle.UUID.UUIDString.UTF8String;
-      CobaltCharacteristic *characteristic = cobalt_characteristic_new((__bridge_retained gpointer) handle, uuid, wrapper);
+      CobaltCharacteristicProperties properties = (CobaltCharacteristicProperties) handle.properties;
+      CobaltCharacteristic *characteristic = cobalt_characteristic_new((__bridge_retained gpointer) handle, uuid, properties, wrapper);
       gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(characteristics), characteristic);
     }
 

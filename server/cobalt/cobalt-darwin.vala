@@ -606,9 +606,29 @@ namespace Cobalt {
 	}
 
 	public class Characteristic : Attribute {
+		public Properties properties {
+			get;
+			construct;
+		}
+
 		public Peripheral peripheral {
 			get;
 			construct;
+		}
+
+		[Flags]
+		[CCode (cprefix = "COBALT_CHARACTERISTIC_PROPERTY_")]
+		public enum Properties {
+			BROADCAST			= 0x01,
+			READ				= 0x02,
+			WRITE_WITHOUT_RESPONSE		= 0x04,
+			WRITE				= 0x08,
+			NOTIFY				= 0x10,
+			INDICATE			= 0x20,
+			AUTHENTICATED_SIGNED_WRITES	= 0x40,
+			EXTENDED_PROPERTIES		= 0x80,
+			NOTIFY_ENCRYPTION_REQUIRED	= 0x100,
+			INDICATE_ENCRYPTION_REQUIRED	= 0x200,
 		}
 
 		public enum WriteType {
@@ -620,10 +640,11 @@ namespace Cobalt {
 		private Gee.ArrayQueue<CharacteristicReadRequest> read_requests = new Gee.ArrayQueue<CharacteristicReadRequest> ();
 		private Gee.ArrayQueue<CharacteristicWriteRequest> write_requests = new Gee.ArrayQueue<CharacteristicWriteRequest> ();
 
-		public Characteristic (void* handle, string uuid, Peripheral peripheral) {
+		public Characteristic (void* handle, string uuid, Properties properties, Peripheral peripheral) {
 			Object (
 				handle: handle,
 				uuid: uuid,
+				properties: properties,
 				peripheral: peripheral
 			);
 		}

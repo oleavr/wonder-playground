@@ -88,6 +88,8 @@ namespace WonderPlayground {
 					foreach (var characteristic in characteristics) {
 						print ("\tcharacteristics[%u]: \"%s\"\n", characteristic_index, characteristic.uuid);
 
+						print ("\t\tproperties: %s\n", characteristic.properties.to_string ());
+
 						try {
 							var val = yield characteristic.read_value ();
 							print ("\t\tvalue: %u bytes\n", (uint) val.get_size ());
