@@ -97,6 +97,11 @@ namespace WonderPlayground {
 							print ("\t\t(unable to read value: \"%s\")\n", e.message);
 						}
 
+						characteristic.notify["value"].connect ((sender, pspec) => {
+							Cobalt.Characteristic c = sender as Cobalt.Characteristic;
+							print ("*** characteristic %s changed: %s\n", c.uuid, hexdump (characteristic.value));
+						});
+
 						try {
 							yield characteristic.set_notify_value (true);
 							print ("\t\tenabled value notifications\n");
@@ -205,5 +210,19 @@ namespace WonderPlayground {
 
 			return Json.to_string (builder.get_root (), false);
 		}
+	}
+
+	private static string hexdump (Bytes bytes) {
+		var result = new StringBuilder ("");
+
+		var data = bytes.get_data ();
+		var size = data.length;
+		for (size_t i = 0; i != size; i++) {
+			if (i > 0)
+				result.append_c (' ');
+			result.append_printf ("%02x", data[i]);
+		}
+
+		return result.str;
 	}
 }

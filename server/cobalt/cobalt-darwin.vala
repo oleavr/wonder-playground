@@ -321,6 +321,8 @@ namespace Cobalt {
 		private Gee.HashMap<void *, CharacteristicSetNotifyValueRequest> characteristic_set_notifies = new Gee.HashMap<void *, CharacteristicSetNotifyValueRequest> ();
 		private Gee.HashMap<void *, DescriptorReadRequest> descriptor_reads = new Gee.HashMap<void *, DescriptorReadRequest> ();
 
+		private Gee.HashMap<void *, Characteristic> characteristic_value_subscriptions = new Gee.HashMap<void *, Characteristic> ();
+
 		public Peripheral (PeripheralManager manager) {
 			Object (manager: manager);
 		}
@@ -473,6 +475,14 @@ namespace Cobalt {
 						request.resolve (val);
 					else
 						request.reject (new IOError.FAILED ("%s", error_description));
+
+					request.characteristic.value = val;
+				}
+
+				if (error_description == null) {
+					var characteristic = characteristic_value_subscriptions[characteristic_impl];
+					if (characteristic != null)
+						characteristic.value = val;
 				}
 			});
 		}
@@ -513,13 +523,19 @@ namespace Cobalt {
 			_start_characteristic_set_notify_value (characteristic, request.enabled);
 		}
 
-		public extern void _start_characteristic_set_notify_value (Characteristic characteristic, bool enabledl);
+		public extern void _start_characteristic_set_notify_value (Characteristic characteristic, bool enabled);
 
 		public void _on_characteristic_set_notify_value_success (void* characteristic_impl) {
 			manager.schedule (() => {
 				CharacteristicSetNotifyValueRequest request;
 				if (characteristic_set_notifies.unset (characteristic_impl, out request)) {
 					request.resolve (true);
+
+					if (request.enabled) {
+						characteristic_value_subscriptions[characteristic_impl] = request.characteristic;
+					} else {
+						characteristic_value_subscriptions.unset (characteristic_impl);
+					}
 				}
 			});
 		}
