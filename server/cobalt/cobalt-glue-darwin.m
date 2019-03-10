@@ -138,7 +138,7 @@ void _cobalt_peripheral_manager_connect_peripheral(CobaltPeripheralManager *wrap
     CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) peripheral->handle;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [managerHandle connectPeripheral:peripheralHandle];
+      [managerHandle connectPeripheral:peripheralHandle];
     });
   }
 }
@@ -149,7 +149,7 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
     CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) peripheral->handle;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [managerHandle cancelPeripheralConnection:peripheralHandle];
+      [managerHandle cancelPeripheralConnection:peripheralHandle];
     });
   }
 }
@@ -174,6 +174,12 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
 
 - (void)startServiceDiscovery:(NSArray<CBUUID *> *)serviceUUIDs {
   [impl discoverServices:serviceUUIDs];
+}
+
+- (void)startIncludedServiceDiscovery:(NSArray<CBUUID *> *)includedServiceUUIDs
+                           forService:(CBService *)service {
+  [impl discoverIncludedServices:includedServiceUUIDs
+                      forService:service];
 }
 
 - (void)startCharacteristicDiscovery:(NSArray<CBUUID *> *)characteristicUUIDs
@@ -202,6 +208,26 @@ didDiscoverServices:(NSError *)error {
     _cobalt_peripheral_on_service_discovery_success(wrapper, services);
   } else {
     _cobalt_peripheral_on_service_discovery_failure(wrapper, error.localizedDescription.UTF8String);
+  }
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral
+didDiscoverIncludedServicesForService:(CBService *)service
+                                error:(NSError *)error {
+  if (error == nil) {
+    GeeArrayList *services = gee_array_list_new(COBALT_TYPE_SERVICE,
+        (GBoxedCopyFunc) g_object_ref, (GDestroyNotify) g_object_unref,
+        NULL, NULL, NULL);
+
+    for (CBService *handle in service.includedServices) {
+      const gchar *uuid = handle.UUID.UUIDString.UTF8String;
+      CobaltService *service = cobalt_service_new((__bridge_retained gpointer) handle, uuid, wrapper);
+      gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(services), service);
+    }
+
+    _cobalt_peripheral_on_included_service_discovery_success(wrapper, (__bridge gpointer) service, services);
+  } else {
+    _cobalt_peripheral_on_included_service_discovery_failure(wrapper, (__bridge gpointer) service, error.localizedDescription.UTF8String);
   }
 }
 
@@ -259,7 +285,21 @@ void _cobalt_peripheral_start_service_discovery(CobaltPeripheral *wrapper, gchar
     NSArray *uuidValues = cobalt_strv_to_uuid_array(uuids, uuidsLength);
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [peripheralHandle startServiceDiscovery:uuidValues];
+      [peripheralHandle startServiceDiscovery:uuidValues];
+    });
+  }
+}
+
+void _cobalt_peripheral_start_included_service_discovery(CobaltPeripheral *wrapper, CobaltService *serviceWrapper, gchar **uuids, int uuidsLength) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    CBService *service = (__bridge CBService *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(serviceWrapper));
+    NSArray *uuidValues = cobalt_strv_to_uuid_array(uuids, uuidsLength);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [peripheralHandle startIncludedServiceDiscovery:uuidValues
+                                           forService:service];
     });
   }
 }
@@ -272,8 +312,8 @@ void _cobalt_peripheral_start_characteristic_discovery(CobaltPeripheral *wrapper
     NSArray *uuidValues = cobalt_strv_to_uuid_array(uuids, uuidsLength);
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [peripheralHandle startCharacteristicDiscovery:uuidValues
-                                            forService:service];
+      [peripheralHandle startCharacteristicDiscovery:uuidValues
+                                          forService:service];
     });
   }
 }
@@ -285,7 +325,7 @@ void _cobalt_peripheral_start_descriptor_discovery(CobaltPeripheral *wrapper, Co
     CBCharacteristic *characteristic = (__bridge CBCharacteristic *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(characteristicWrapper));
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [peripheralHandle startDescriptorDiscovery:characteristic];
+      [peripheralHandle startDescriptorDiscovery:characteristic];
     });
   }
 }

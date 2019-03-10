@@ -74,6 +74,14 @@ namespace WonderPlayground {
 				foreach (var service in services) {
 					print ("services[%u]: \"%s\"\n", service_index, service.uuid);
 
+					var included_services = yield service.discover_included_services (null, cancellable);
+					uint included_index = 0;
+					foreach (var included_service in included_services) {
+						print ("\tincluded_services[%u]: \"%s\"\n", included_index, included_service.uuid);
+
+						included_index++;
+					}
+
 					var characteristics = yield service.discover_characteristics (null, cancellable);
 					uint characteristic_index = 0;
 					foreach (var characteristic in characteristics) {

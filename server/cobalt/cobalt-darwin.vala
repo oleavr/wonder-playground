@@ -310,6 +310,7 @@ namespace Cobalt {
 		}
 
 		private Gee.ArrayQueue<ServiceDiscovery> service_discoveries = new Gee.ArrayQueue<ServiceDiscovery> ();
+		private Gee.HashMap<void *, IncludedServiceDiscovery> included_service_discoveries = new Gee.HashMap<void *, IncludedServiceDiscovery> ();
 		private Gee.HashMap<void *, CharacteristicDiscovery> characteristic_discoveries = new Gee.HashMap<void *, CharacteristicDiscovery> ();
 		private Gee.HashMap<void *, DescriptorDiscovery> descriptor_discoveries = new Gee.HashMap<void *, DescriptorDiscovery> ();
 
@@ -360,6 +361,34 @@ namespace Cobalt {
 				discovery.reject (new IOError.FAILED ("%s", error_description));
 
 				process_next_service_discovery ();
+			});
+		}
+
+		internal void process_included_service_discovery (IncludedServiceDiscovery discovery) {
+			var service = discovery.service;
+
+			included_service_discoveries[service.handle] = discovery;
+
+			_start_included_service_discovery (service, discovery.uuids);
+		}
+
+		public extern void _start_included_service_discovery (Service service, string[]? uuids);
+
+		public void _on_included_service_discovery_success (void* service_impl, owned Gee.ArrayList<Service> included_services) {
+			manager.schedule (() => {
+				IncludedServiceDiscovery discovery;
+				if (included_service_discoveries.unset (service_impl, out discovery)) {
+					discovery.resolve (included_services);
+				}
+			});
+		}
+
+		public void _on_included_service_discovery_failure (void* service_impl, string error_description) {
+			manager.schedule (() => {
+				IncludedServiceDiscovery discovery;
+				if (included_service_discoveries.unset (service_impl, out discovery)) {
+					discovery.reject (new IOError.FAILED ("%s", error_description));
+				}
 			});
 		}
 
@@ -444,6 +473,7 @@ namespace Cobalt {
 			construct;
 		}
 
+		private Gee.ArrayQueue<IncludedServiceDiscovery> included_service_discoveries = new Gee.ArrayQueue<IncludedServiceDiscovery> ();
 		private Gee.ArrayQueue<CharacteristicDiscovery> characteristic_discoveries = new Gee.ArrayQueue<CharacteristicDiscovery> ();
 
 		public Service (void* handle, string uuid, Peripheral peripheral) {
@@ -452,6 +482,27 @@ namespace Cobalt {
 				uuid: uuid,
 				peripheral: peripheral
 			);
+		}
+
+		public async Gee.ArrayList<Service> discover_included_services (string[]? uuids = null, Cancellable? cancellable = null) throws Error {
+			var discovery = new IncludedServiceDiscovery (this, uuids, cancellable);
+			included_service_discoveries.offer_tail (discovery);
+
+			discovery.completed.connect (() => {
+				included_service_discoveries.poll_head ();
+				process_next_included_service_discovery ();
+			});
+
+			if (included_service_discoveries.peek_head () == discovery)
+				peripheral.process_included_service_discovery (discovery);
+
+			return yield discovery.future.wait_async ();
+		}
+
+		private void process_next_included_service_discovery () {
+			var discovery = included_service_discoveries.peek_head ();
+			if (discovery != null)
+				peripheral.process_included_service_discovery (discovery);
 		}
 
 		public async Gee.ArrayList<Characteristic> discover_characteristics (string[]? uuids = null, Cancellable? cancellable = null) throws Error {
@@ -529,6 +580,22 @@ namespace Cobalt {
 				uuids: uuids,
 				cancellable: cancellable,
 				manager: manager
+			);
+		}
+	}
+
+	private class IncludedServiceDiscovery : AttributeDiscovery<Gee.ArrayList<Service>> {
+		public Service service {
+			get;
+			construct;
+		}
+
+		public IncludedServiceDiscovery (Service service, string[]? uuids, Cancellable? cancellable) {
+			Object (
+				service: service,
+				uuids: uuids,
+				cancellable: cancellable,
+				manager: service.peripheral.manager
 			);
 		}
 	}
