@@ -208,6 +208,12 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
   }
 }
 
+- (void)startCharacteristicSetNotifyValue:(CBCharacteristic *)characteristic
+                                  enabled:(BOOL)enabled {
+  [impl setNotifyValue:enabled
+     forCharacteristic:characteristic];
+}
+
 - (void)startDescriptorRead:(CBDescriptor *)descriptor {
   [impl readValueForDescriptor:descriptor];
 }
@@ -314,6 +320,16 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral
+didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic
+                                      error:(NSError *)error {
+  if (error == nil) {
+    _cobalt_peripheral_on_characteristic_set_notify_value_success(wrapper, (__bridge gpointer) characteristic);
+  } else {
+    _cobalt_peripheral_on_characteristic_set_notify_value_failure(wrapper, (__bridge gpointer) characteristic, error.localizedDescription.UTF8String);
+  }
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral
 didUpdateValueForDescriptor:(CBDescriptor *)descriptor
                       error:(NSError *)error {
   if (error == nil) {
@@ -409,6 +425,19 @@ void _cobalt_peripheral_start_characteristic_write(CobaltPeripheral *wrapper, Co
       [peripheralHandle startCharacteristicWrite:characteristic
                                            value:data
                                             type:(CBCharacteristicWriteType) write_type];
+    });
+  }
+}
+
+void _cobalt_peripheral_start_characteristic_set_notify_value(CobaltPeripheral *wrapper, CobaltCharacteristic *characteristicWrapper, gboolean enabled) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    CBCharacteristic *characteristic = (__bridge CBCharacteristic *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(characteristicWrapper));
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [peripheralHandle startCharacteristicSetNotifyValue:characteristic
+                                                  enabled:enabled];
     });
   }
 }

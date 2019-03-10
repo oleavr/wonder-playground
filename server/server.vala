@@ -97,6 +97,13 @@ namespace WonderPlayground {
 							print ("\t\t(unable to read value: \"%s\")\n", e.message);
 						}
 
+						try {
+							yield characteristic.set_notify_value (true);
+							print ("\t\tenabled value notifications\n");
+						} catch (Error e) {
+							print ("\t\t(unable to enable value notifications: \"%s\")\n", e.message);
+						}
+
 						if (characteristic.uuid == "AF230002-879D-6186-1F49-DECA0E85D9C1") {
 							try {
 								var val = new Bytes (new uint8[] {

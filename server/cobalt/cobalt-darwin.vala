@@ -318,6 +318,7 @@ namespace Cobalt {
 		private Gee.HashMap<void *, DescriptorDiscovery> descriptor_discoveries = new Gee.HashMap<void *, DescriptorDiscovery> ();
 		private Gee.HashMap<void *, CharacteristicReadRequest> characteristic_reads = new Gee.HashMap<void *, CharacteristicReadRequest> ();
 		private Gee.HashMap<void *, CharacteristicWriteRequest> characteristic_writes = new Gee.HashMap<void *, CharacteristicWriteRequest> ();
+		private Gee.HashMap<void *, CharacteristicSetNotifyValueRequest> characteristic_set_notifies = new Gee.HashMap<void *, CharacteristicSetNotifyValueRequest> ();
 		private Gee.HashMap<void *, DescriptorReadRequest> descriptor_reads = new Gee.HashMap<void *, DescriptorReadRequest> ();
 
 		public Peripheral (PeripheralManager manager) {
@@ -504,6 +505,34 @@ namespace Cobalt {
 			});
 		}
 
+		internal void process_characteristic_set_notify_value_request (CharacteristicSetNotifyValueRequest request) {
+			var characteristic = request.characteristic;
+
+			characteristic_set_notifies[characteristic.handle] = request;
+
+			_start_characteristic_set_notify_value (characteristic, request.enabled);
+		}
+
+		public extern void _start_characteristic_set_notify_value (Characteristic characteristic, bool enabledl);
+
+		public void _on_characteristic_set_notify_value_success (void* characteristic_impl) {
+			manager.schedule (() => {
+				CharacteristicSetNotifyValueRequest request;
+				if (characteristic_set_notifies.unset (characteristic_impl, out request)) {
+					request.resolve (true);
+				}
+			});
+		}
+
+		public void _on_characteristic_set_notify_value_failure (void* characteristic_impl, string error_description) {
+			manager.schedule (() => {
+				CharacteristicSetNotifyValueRequest request;
+				if (characteristic_set_notifies.unset (characteristic_impl, out request)) {
+					request.reject (new IOError.FAILED ("%s", error_description));
+				}
+			});
+		}
+
 		internal void process_descriptor_read_request (DescriptorReadRequest request) {
 			var descriptor = request.descriptor;
 
@@ -606,6 +635,11 @@ namespace Cobalt {
 	}
 
 	public class Characteristic : Attribute {
+		public Bytes? @value {
+			get;
+			set;
+		}
+
 		public Properties properties {
 			get;
 			construct;
@@ -639,6 +673,7 @@ namespace Cobalt {
 		private Gee.ArrayQueue<DescriptorDiscovery> descriptor_discoveries = new Gee.ArrayQueue<DescriptorDiscovery> ();
 		private Gee.ArrayQueue<CharacteristicReadRequest> read_requests = new Gee.ArrayQueue<CharacteristicReadRequest> ();
 		private Gee.ArrayQueue<CharacteristicWriteRequest> write_requests = new Gee.ArrayQueue<CharacteristicWriteRequest> ();
+		private Gee.ArrayQueue<CharacteristicSetNotifyValueRequest> set_notify_value_requests = new Gee.ArrayQueue<CharacteristicSetNotifyValueRequest> ();
 
 		public Characteristic (void* handle, string uuid, Properties properties, Peripheral peripheral) {
 			Object (
@@ -710,6 +745,27 @@ namespace Cobalt {
 			var request = write_requests.peek_head ();
 			if (request != null)
 				peripheral.process_characteristic_write_request (request);
+		}
+
+		public async void set_notify_value (bool enabled, Cancellable? cancellable = null) throws Error {
+			var request = new CharacteristicSetNotifyValueRequest (this, enabled, cancellable);
+			set_notify_value_requests.offer_tail (request);
+
+			request.completed.connect (() => {
+				set_notify_value_requests.poll_head ();
+				process_next_set_notify_value_request ();
+			});
+
+			if (set_notify_value_requests.peek_head () == request)
+				peripheral.process_characteristic_set_notify_value_request (request);
+
+			yield request.wait_async ();
+		}
+
+		private void process_next_set_notify_value_request () {
+			var request = set_notify_value_requests.peek_head ();
+			if (request != null)
+				peripheral.process_characteristic_set_notify_value_request (request);
 		}
 	}
 
@@ -844,6 +900,27 @@ namespace Cobalt {
 				characteristic: characteristic,
 				val: val,
 				write_type: write_type,
+				cancellable: cancellable,
+				manager: characteristic.peripheral.manager
+			);
+		}
+	}
+
+	private class CharacteristicSetNotifyValueRequest : Request<bool> {
+		public Characteristic characteristic {
+			get;
+			construct;
+		}
+
+		public bool enabled {
+			get;
+			construct;
+		}
+
+		public CharacteristicSetNotifyValueRequest (Characteristic characteristic, bool enabled, Cancellable? cancellable) {
+			Object (
+				characteristic: characteristic,
+				enabled: enabled,
 				cancellable: cancellable,
 				manager: characteristic.peripheral.manager
 			);
