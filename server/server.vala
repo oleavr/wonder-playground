@@ -87,6 +87,13 @@ namespace WonderPlayground {
 					foreach (var characteristic in characteristics) {
 						print ("\tcharacteristics[%u]: \"%s\"\n", characteristic_index, characteristic.uuid);
 
+						try {
+							var val = yield characteristic.read_value ();
+							print ("\t\tvalue: %u bytes\n", (uint) val.get_size ());
+						} catch (Error e) {
+							print ("\t\t(unable to read value: %s)\n", e.message);
+						}
+
 						var descriptors = yield characteristic.discover_descriptors ();
 						uint descriptors_index = 0;
 						foreach (var descriptor in descriptors) {

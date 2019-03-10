@@ -192,6 +192,10 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
   [impl discoverDescriptorsForCharacteristic:characteristic];
 }
 
+- (void)startCharacteristicRead:(CBCharacteristic *)characteristic {
+  [impl readValueForCharacteristic:characteristic];
+}
+
 -  (void)peripheral:(CBPeripheral *)peripheral
 didDiscoverServices:(NSError *)error {
   if (error == nil) {
@@ -271,6 +275,17 @@ didDiscoverDescriptorsForCharacteristic:(CBCharacteristic *)characteristic
   }
 }
 
+- (void)peripheral:(CBPeripheral *)peripheral
+didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
+                          error:(NSError *)error {
+  if (error == nil) {
+    NSData *data = characteristic.value;
+    _cobalt_peripheral_on_characteristic_value_updated(wrapper, (__bridge gpointer) characteristic, g_bytes_new(data.bytes, data.length), NULL);
+  } else {
+    _cobalt_peripheral_on_characteristic_value_updated(wrapper, (__bridge gpointer) characteristic, NULL, error.localizedDescription.UTF8String);
+  }
+}
+
 @end
 
 gpointer _cobalt_peripheral_get_implementation(CobaltPeripheral *wrapper) {
@@ -326,6 +341,18 @@ void _cobalt_peripheral_start_descriptor_discovery(CobaltPeripheral *wrapper, Co
 
     dispatch_async(dispatch_get_main_queue(), ^{
       [peripheralHandle startDescriptorDiscovery:characteristic];
+    });
+  }
+}
+
+void _cobalt_peripheral_start_characteristic_read(CobaltPeripheral *wrapper, CobaltCharacteristic *characteristicWrapper) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    CBCharacteristic *characteristic = (__bridge CBCharacteristic *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(characteristicWrapper));
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [peripheralHandle startCharacteristicRead:characteristic];
     });
   }
 }

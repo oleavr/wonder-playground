@@ -168,8 +168,11 @@ namespace Cobalt {
 
 			_connect_peripheral (peripheral);
 
+			var future = request.future;
 			try {
-				yield request.future.wait_async ();
+				yield future.wait_async ();
+			} catch (Gee.FutureError e) {
+				throw future.exception;
 			} finally {
 				if (cancellable != null)
 					cancellable.disconnect (cancel_handler);
@@ -313,6 +316,7 @@ namespace Cobalt {
 		private Gee.HashMap<void *, IncludedServiceDiscovery> included_service_discoveries = new Gee.HashMap<void *, IncludedServiceDiscovery> ();
 		private Gee.HashMap<void *, CharacteristicDiscovery> characteristic_discoveries = new Gee.HashMap<void *, CharacteristicDiscovery> ();
 		private Gee.HashMap<void *, DescriptorDiscovery> descriptor_discoveries = new Gee.HashMap<void *, DescriptorDiscovery> ();
+		private Gee.HashMap<void *, CharacteristicReadRequest> characteristic_reads = new Gee.HashMap<void *, CharacteristicReadRequest> ();
 
 		public Peripheral (PeripheralManager manager) {
 			Object (manager: manager);
@@ -331,7 +335,7 @@ namespace Cobalt {
 			if (service_discoveries.peek_head () == discovery)
 				process_service_discovery_request (discovery);
 
-			return yield discovery.future.wait_async ();
+			return yield discovery.wait_async ();
 		}
 
 		private void process_next_service_discovery () {
@@ -447,6 +451,28 @@ namespace Cobalt {
 				}
 			});
 		}
+
+		internal void process_characteristic_read_request (CharacteristicReadRequest request) {
+			var characteristic = request.characteristic;
+
+			characteristic_reads[characteristic.handle] = request;
+
+			_start_characteristic_read (characteristic);
+		}
+
+		public extern void _start_characteristic_read (Characteristic characteristic);
+
+		public void _on_characteristic_value_updated (void* characteristic_impl, owned Bytes? val, string? error_description) {
+			manager.schedule (() => {
+				CharacteristicReadRequest request;
+				if (characteristic_reads.unset (characteristic_impl, out request)) {
+					if (error_description == null)
+						request.resolve (val);
+					else
+						request.reject (new IOError.FAILED ("%s", error_description));
+				}
+			});
+		}
 	}
 
 	public abstract class Attribute : Object {
@@ -496,7 +522,7 @@ namespace Cobalt {
 			if (included_service_discoveries.peek_head () == discovery)
 				peripheral.process_included_service_discovery (discovery);
 
-			return yield discovery.future.wait_async ();
+			return yield discovery.wait_async ();
 		}
 
 		private void process_next_included_service_discovery () {
@@ -517,7 +543,7 @@ namespace Cobalt {
 			if (characteristic_discoveries.peek_head () == discovery)
 				peripheral.process_characteristic_discovery (discovery);
 
-			return yield discovery.future.wait_async ();
+			return yield discovery.wait_async ();
 		}
 
 		private void process_next_characteristic_discovery () {
@@ -533,6 +559,7 @@ namespace Cobalt {
 			construct;
 		}
 
+		private Gee.ArrayQueue<CharacteristicReadRequest> read_requests = new Gee.ArrayQueue<CharacteristicReadRequest> ();
 		private Gee.ArrayQueue<DescriptorDiscovery> descriptor_discoveries = new Gee.ArrayQueue<DescriptorDiscovery> ();
 
 		public Characteristic (void* handle, string uuid, Peripheral peripheral) {
@@ -541,6 +568,27 @@ namespace Cobalt {
 				uuid: uuid,
 				peripheral: peripheral
 			);
+		}
+
+		public async Bytes read_value (Cancellable? cancellable = null) throws Error {
+			var request = new CharacteristicReadRequest (this, cancellable);
+			read_requests.offer_tail (request);
+
+			request.completed.connect (() => {
+				read_requests.poll_head ();
+				process_next_read_request ();
+			});
+
+			if (read_requests.peek_head () == request)
+				peripheral.process_characteristic_read_request (request);
+
+			return yield request.wait_async ();
+		}
+
+		private void process_next_read_request () {
+			var request = read_requests.peek_head ();
+			if (request != null)
+				peripheral.process_characteristic_read_request (request);
 		}
 
 		public async Gee.ArrayList<Descriptor> discover_descriptors (Cancellable? cancellable = null) throws Error {
@@ -555,7 +603,7 @@ namespace Cobalt {
 			if (descriptor_discoveries.peek_head () == discovery)
 				peripheral.process_descriptor_discovery (discovery);
 
-			return yield discovery.future.wait_async ();
+			return yield discovery.wait_async ();
 		}
 
 		private void process_next_descriptor_discovery () {
@@ -574,7 +622,7 @@ namespace Cobalt {
 		}
 	}
 
-	private class ServiceDiscovery : AttributeDiscovery<Gee.ArrayList<Service>> {
+	private class ServiceDiscovery : Request<Gee.ArrayList<Service>> {
 		public ServiceDiscovery (string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
 			Object (
 				uuids: uuids,
@@ -584,7 +632,7 @@ namespace Cobalt {
 		}
 	}
 
-	private class IncludedServiceDiscovery : AttributeDiscovery<Gee.ArrayList<Service>> {
+	private class IncludedServiceDiscovery : Request<Gee.ArrayList<Service>> {
 		public Service service {
 			get;
 			construct;
@@ -600,7 +648,7 @@ namespace Cobalt {
 		}
 	}
 
-	private class CharacteristicDiscovery : AttributeDiscovery<Gee.ArrayList<Characteristic>> {
+	private class CharacteristicDiscovery : Request<Gee.ArrayList<Characteristic>> {
 		public Service service {
 			get;
 			construct;
@@ -616,7 +664,22 @@ namespace Cobalt {
 		}
 	}
 
-	private class DescriptorDiscovery : AttributeDiscovery<Gee.ArrayList<Descriptor>> {
+	private class CharacteristicReadRequest : Request<Bytes> {
+		public Characteristic characteristic {
+			get;
+			construct;
+		}
+
+		public CharacteristicReadRequest (Characteristic characteristic, Cancellable? cancellable) {
+			Object (
+				characteristic: characteristic,
+				cancellable: cancellable,
+				manager: characteristic.peripheral.manager
+			);
+		}
+	}
+
+	private class DescriptorDiscovery : Request<Gee.ArrayList<Descriptor>> {
 		public Characteristic characteristic {
 			get;
 			construct;
@@ -631,7 +694,7 @@ namespace Cobalt {
 		}
 	}
 
-	private class AttributeDiscovery<T> : Object {
+	private class Request<T> : Object {
 		public string[]? uuids {
 			get;
 			construct;
@@ -640,12 +703,6 @@ namespace Cobalt {
 		public Cancellable? cancellable {
 			get;
 			construct;
-		}
-
-		public Gee.Future<T> future {
-			get {
-				return promise.future;
-			}
 		}
 
 		public PeripheralManager manager {
@@ -672,9 +729,18 @@ namespace Cobalt {
 			}
 		}
 
-		~AttributeDiscovery () {
+		~Request () {
 			if (cancellable != null)
 				cancellable.disconnect (cancel_handler);
+		}
+
+		public async T wait_async () throws Error {
+			var future = promise.future;
+			try {
+				return yield future.wait_async ();
+			} catch (Gee.FutureError e) {
+				throw future.exception;
+			}
 		}
 
 		public void resolve (T val) {
