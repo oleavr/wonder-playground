@@ -2,7 +2,6 @@
 
 #import <CoreBluetooth/CoreBluetooth.h>
 
-static GeeArrayList *cobalt_parse_characteristic_array(NSArray<CBCharacteristic *> *characteristics);
 static NSArray<CBUUID *> *cobalt_strv_to_uuid_array(gchar **uuids, int uuidsLength);
 
 @interface CobaltPeripheralManagerHandle : NSObject <CBCentralManagerDelegate> {
@@ -76,13 +75,13 @@ static NSArray<CBUUID *> *cobalt_strv_to_uuid_array(gchar **uuids, int uuidsLeng
   _cobalt_peripheral_manager_on_connect_success(wrapper, (__bridge gpointer) peripheral);
 }
 
--     (void)centralManager:(CBCentralManager *)central
+- (void)centralManager:(CBCentralManager *)central
 didFailToConnectPeripheral:(CBPeripheral *)peripheral
                      error:(NSError *)error {
   _cobalt_peripheral_manager_on_connect_failure(wrapper, (__bridge gpointer) peripheral, error.localizedDescription.UTF8String);
 }
 
--  (void)centralManager:(CBCentralManager *)central
+- (void)centralManager:(CBCentralManager *)central
 didDisconnectPeripheral:(CBPeripheral *)peripheral
                   error:(NSError *)error {
   _cobalt_peripheral_manager_on_disconnect(wrapper, (__bridge gpointer) peripheral, error.localizedDescription.UTF8String);
@@ -177,6 +176,12 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
   [impl discoverServices:serviceUUIDs];
 }
 
+- (void)startCharacteristicDiscovery:(NSArray<CBUUID *> *)characteristicUUIDs
+                          forService:(CBService *)service {
+  [impl discoverCharacteristics:characteristicUUIDs
+                     forService:service];
+}
+
 -  (void)peripheral:(CBPeripheral *)peripheral
 didDiscoverServices:(NSError *)error {
   if (error == nil) {
@@ -186,14 +191,33 @@ didDiscoverServices:(NSError *)error {
 
     for (CBService *handle in peripheral.services) {
       const gchar *uuid = handle.UUID.UUIDString.UTF8String;
-      GeeArrayList *characteristics = cobalt_parse_characteristic_array(handle.characteristics);
-      CobaltService *service = cobalt_service_new((__bridge_retained gpointer) handle, uuid, characteristics);
+      CobaltService *service = cobalt_service_new((__bridge_retained gpointer) handle, uuid, wrapper);
       gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(services), service);
     }
 
     _cobalt_peripheral_on_service_discovery_success(wrapper, services);
   } else {
     _cobalt_peripheral_on_service_discovery_failure(wrapper, error.localizedDescription.UTF8String);
+  }
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral
+didDiscoverCharacteristicsForService:(CBService *)service
+                               error:(NSError *)error {
+  if (error == nil) {
+    GeeArrayList *characteristics = gee_array_list_new(COBALT_TYPE_CHARACTERISTIC,
+        (GBoxedCopyFunc) g_object_ref, (GDestroyNotify) g_object_unref,
+        NULL, NULL, NULL);
+
+    for (CBCharacteristic *handle in service.characteristics) {
+      const gchar *uuid = handle.UUID.UUIDString.UTF8String;
+      CobaltCharacteristic *characteristic = cobalt_characteristic_new((__bridge_retained gpointer) handle, uuid);
+      gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(characteristics), characteristic);
+    }
+
+    _cobalt_peripheral_on_characteristic_discovery_success(wrapper, characteristics);
+  } else {
+    _cobalt_peripheral_on_characteristic_discovery_failure(wrapper, error.localizedDescription.UTF8String);
   }
 }
 
@@ -216,26 +240,25 @@ void _cobalt_peripheral_start_service_discovery(CobaltPeripheral *wrapper, gchar
   }
 }
 
+void _cobalt_peripheral_start_characteristic_discovery(CobaltPeripheral *wrapper, CobaltService *serviceWrapper, gchar **uuids, int uuidsLength) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    CBService *service = (__bridge CBService *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(serviceWrapper));
+    NSArray *uuidValues = cobalt_strv_to_uuid_array(uuids, uuidsLength);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [peripheralHandle startCharacteristicDiscovery:uuidValues
+                                            forService:service];
+    });
+  }
+}
+
 void _cobalt_attribute_close(gpointer opaqueHandle) {
   @autoreleasepool {
     CBService *handle = (__bridge_transfer CBService *) opaqueHandle;
     handle = nil;
   }
-}
-
-static GeeArrayList *
-cobalt_parse_characteristic_array(NSArray<CBCharacteristic *> *characteristics) {
-  GeeArrayList *result = gee_array_list_new(COBALT_TYPE_CHARACTERISTIC,
-      (GBoxedCopyFunc) g_object_ref, (GDestroyNotify) g_object_unref,
-      NULL, NULL, NULL);
-
-  for (CBCharacteristic *handle in characteristics) {
-    const gchar *uuid = handle.UUID.UUIDString.UTF8String;
-    CobaltCharacteristic *characteristic = cobalt_characteristic_new((__bridge_retained gpointer) handle, uuid);
-    gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(result), characteristic);
-  }
-
-  return result;
 }
 
 static NSArray<CBUUID *> *

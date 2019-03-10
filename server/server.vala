@@ -74,8 +74,9 @@ namespace WonderPlayground {
 				foreach (var service in services) {
 					print ("services[%u]: \"%s\"\n", service_index, service.uuid);
 
+					var characteristics = yield service.discover_characteristics (null, cancellable);
 					uint characteristic_index = 0;
-					foreach (var characteristic in service.characteristics) {
+					foreach (var characteristic in characteristics) {
 						print ("\tcharacteristics[%u]: \"%s\"\n", characteristic_index, characteristic.uuid);
 
 						characteristic_index++;

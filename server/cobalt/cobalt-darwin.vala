@@ -17,8 +17,8 @@ namespace Cobalt {
 			POWERED_ON
 		}
 
-		private Gee.ArrayQueue<Scan> pending_scans = new Gee.ArrayQueue<Scan> ();
-		private Gee.HashMap<void *, Gee.Promise<bool>> pending_connect_requests = new Gee.HashMap<void *, Gee.Promise<bool>> ();
+		private Gee.ArrayQueue<Scan> scans = new Gee.ArrayQueue<Scan> ();
+		private Gee.HashMap<void *, Gee.Promise<bool>> connect_requests = new Gee.HashMap<void *, Gee.Promise<bool>> ();
 
 		construct {
 			handle = _open ();
@@ -104,20 +104,20 @@ namespace Cobalt {
 
 		private Scan schedule_scan (string[] uuids, Cancellable? cancellable) {
 			var scan = new Scan (uuids, cancellable, this);
-			pending_scans.offer_tail (scan);
+			scans.offer_tail (scan);
 
 			ulong state_handler = 0;
 			state_handler = scan.notify["state"].connect (() => {
 				switch (scan.state) {
 					case ENDING:
-						if (scan == pending_scans.peek_head ())
+						if (scan == scans.peek_head ())
 							_stop_scan ();
 						else
 							scan.state = ENDED;
 						break;
 					case ENDED:
 						scan.disconnect (state_handler);
-						pending_scans.remove (scan);
+						scans.remove (scan);
 						process_next_scan ();
 						break;
 					default:
@@ -131,7 +131,7 @@ namespace Cobalt {
 		}
 
 		private void process_next_scan () {
-			var scan = pending_scans.peek_head ();
+			var scan = scans.peek_head ();
 			if (scan == null || scan.state != PENDING)
 				return;
 			scan.state = STARTED;
@@ -143,21 +143,21 @@ namespace Cobalt {
 
 		public void _on_scan_match_found (owned Peripheral peripheral) {
 			schedule (() => {
-				var scan = pending_scans.peek_head ();
+				var scan = scans.peek_head ();
 				scan.handle_match (peripheral);
 			});
 		}
 
 		public void _on_scan_stopped () {
 			schedule (() => {
-				var scan = pending_scans.peek_head ();
+				var scan = scans.peek_head ();
 				scan.state = ENDED;
 			});
 		}
 
 		internal async void establish_connection (Peripheral peripheral, Cancellable? cancellable) throws Error {
 			var request = new Gee.Promise<bool> ();
-			pending_connect_requests[peripheral.implementation] = request;
+			connect_requests[peripheral.implementation] = request;
 
 			ulong cancel_handler = 0;
 			if (cancellable != null) {
@@ -185,7 +185,7 @@ namespace Cobalt {
 		public void _on_connect_success (void* peripheral_impl) {
 			schedule (() => {
 				Gee.Promise<bool> request;
-				if (pending_connect_requests.unset (peripheral_impl, out request)) {
+				if (connect_requests.unset (peripheral_impl, out request)) {
 					request.set_value (true);
 				}
 			});
@@ -194,7 +194,7 @@ namespace Cobalt {
 		public void _on_connect_failure (void* peripheral_impl, string error_description) {
 			schedule (() => {
 				Gee.Promise<bool> request;
-				if (pending_connect_requests.unset (peripheral_impl, out request)) {
+				if (connect_requests.unset (peripheral_impl, out request)) {
 					request.set_exception (new IOError.FAILED ("Unable to connect: %s", error_description));
 				}
 			});
@@ -203,7 +203,7 @@ namespace Cobalt {
 		public void _on_disconnect (void* peripheral_impl, string? error_description) {
 			schedule (() => {
 				Gee.Promise<bool> request;
-				if (pending_connect_requests.unset (peripheral_impl, out request)) {
+				if (connect_requests.unset (peripheral_impl, out request)) {
 					request.set_exception (new IOError.CANCELLED ("Cancelled"));
 				}
 			});
@@ -309,7 +309,8 @@ namespace Cobalt {
 			}
 		}
 
-		private Gee.ArrayQueue<ServiceDiscovery> pending_discoveries = new Gee.ArrayQueue<ServiceDiscovery> ();
+		private Gee.ArrayQueue<ServiceDiscovery> service_discoveries = new Gee.ArrayQueue<ServiceDiscovery> ();
+		private Gee.ArrayQueue<CharacteristicDiscovery> characteristic_discoveries = new Gee.ArrayQueue<CharacteristicDiscovery> ();
 
 		public Peripheral (PeripheralManager manager) {
 			Object (manager: manager);
@@ -323,16 +324,16 @@ namespace Cobalt {
 
 		public async Gee.ArrayList<Service> discover_services (string[]? uuids = null, Cancellable? cancellable = null) throws Error {
 			var discovery = new ServiceDiscovery (uuids, cancellable, manager);
-			pending_discoveries.offer_tail (discovery);
+			service_discoveries.offer_tail (discovery);
 
-			if (pending_discoveries.peek_head () == discovery)
+			if (service_discoveries.peek_head () == discovery)
 				process_service_discovery_request (discovery);
 
 			return yield discovery.future.wait_async ();
 		}
 
 		private void process_next_service_discovery_request () {
-			var discovery = pending_discoveries.peek_head ();
+			var discovery = service_discoveries.peek_head ();
 			if (discovery != null)
 				process_service_discovery_request (discovery);
 		}
@@ -345,7 +346,7 @@ namespace Cobalt {
 
 		public void _on_service_discovery_success (owned Gee.ArrayList<Service> services) {
 			manager.schedule (() => {
-				var discovery = pending_discoveries.poll_head ();
+				var discovery = service_discoveries.poll_head ();
 				discovery.resolve (services);
 
 				process_next_service_discovery_request ();
@@ -354,14 +355,80 @@ namespace Cobalt {
 
 		public void _on_service_discovery_failure (string error_description) {
 			manager.schedule (() => {
-				var discovery = pending_discoveries.poll_head ();
+				var discovery = service_discoveries.poll_head ();
 				discovery.reject (new IOError.FAILED ("%s", error_description));
 
 				process_next_service_discovery_request ();
 			});
 		}
 
-		private class ServiceDiscovery : Object {
+		private class ServiceDiscovery : AttributeDiscovery<Gee.ArrayList<Service>> {
+			public ServiceDiscovery (string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
+				Object (
+					uuids: uuids,
+					cancellable: cancellable,
+					manager: manager
+				);
+			}
+		}
+
+		internal async Gee.ArrayList<Characteristic> discover_characteristics (Service service, string[]? uuids, Cancellable? cancellable) throws Error {
+			var discovery = new CharacteristicDiscovery (service, uuids, cancellable, manager);
+			characteristic_discoveries.offer_tail (discovery);
+
+			if (characteristic_discoveries.peek_head () == discovery)
+				process_characteristic_discovery_request (discovery);
+
+			return yield discovery.future.wait_async ();
+		}
+
+		private void process_next_characteristic_discovery_request () {
+			var discovery = characteristic_discoveries.peek_head ();
+			if (discovery != null)
+				process_characteristic_discovery_request (discovery);
+		}
+
+		private void process_characteristic_discovery_request (CharacteristicDiscovery discovery) {
+			_start_characteristic_discovery (discovery.service, discovery.uuids);
+		}
+
+		public extern void _start_characteristic_discovery (Service service, string[]? uuids);
+
+		public void _on_characteristic_discovery_success (owned Gee.ArrayList<Characteristic> characteristics) {
+			manager.schedule (() => {
+				var discovery = characteristic_discoveries.poll_head ();
+				discovery.resolve (characteristics);
+
+				process_next_characteristic_discovery_request ();
+			});
+		}
+
+		public void _on_characteristic_discovery_failure (string error_description) {
+			manager.schedule (() => {
+				var discovery = characteristic_discoveries.poll_head ();
+				discovery.reject (new IOError.FAILED ("%s", error_description));
+
+				process_next_characteristic_discovery_request ();
+			});
+		}
+
+		private class CharacteristicDiscovery : AttributeDiscovery<Gee.ArrayList<Characteristic>> {
+			public Service service {
+				get;
+				construct;
+			}
+
+			public CharacteristicDiscovery (Service service, string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
+				Object (
+					service: service,
+					uuids: uuids,
+					cancellable: cancellable,
+					manager: manager
+				);
+			}
+		}
+
+		private class AttributeDiscovery<T> : Object {
 			public string[]? uuids {
 				get;
 				construct;
@@ -372,7 +439,7 @@ namespace Cobalt {
 				construct;
 			}
 
-			public Gee.Future<Gee.ArrayList<Service>> future {
+			public Gee.Future<T> future {
 				get {
 					return promise.future;
 				}
@@ -383,19 +450,13 @@ namespace Cobalt {
 				construct;
 			}
 
-			private Gee.Promise<Gee.ArrayList<Service>> promise = new Gee.Promise<Gee.ArrayList<Service>> ();
+			private Gee.Promise<T> promise;
 
 			private ulong cancel_handler = 0;
 
-			public ServiceDiscovery (string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
-				Object (
-					uuids: uuids,
-					cancellable: cancellable,
-					manager: manager
-				);
-			}
-
 			construct {
+				promise = new Gee.Promise<T> ();
+
 				if (cancellable != null) {
 					cancel_handler = cancellable.connect (() => {
 						manager.schedule (() => {
@@ -407,13 +468,13 @@ namespace Cobalt {
 				}
 			}
 
-			~ServiceDiscovery () {
+			~AttributeDiscovery () {
 				if (cancellable != null)
 					cancellable.disconnect (cancel_handler);
 			}
 
-			public void resolve (Gee.ArrayList<Service> services) {
-				promise.set_value (services);
+			public void resolve (T val) {
+				promise.set_value (val);
 			}
 
 			public void reject (Error error) {
@@ -441,17 +502,21 @@ namespace Cobalt {
 	}
 
 	public class Service : Attribute {
-		public Gee.ArrayList<Characteristic> characteristics {
+		public Peripheral peripheral {
 			get;
 			construct;
 		}
 
-		public Service (void* handle, string uuid, Gee.ArrayList<Characteristic> characteristics) {
+		public Service (void* handle, string uuid, Peripheral peripheral) {
 			Object (
 				handle: handle,
 				uuid: uuid,
-				characteristics: characteristics
+				peripheral: peripheral
 			);
+		}
+
+		public async Gee.ArrayList<Characteristic> discover_characteristics (string[]? uuids = null, Cancellable? cancellable = null) throws Error {
+			return yield peripheral.discover_characteristics (this, uuids, cancellable);
 		}
 	}
 
