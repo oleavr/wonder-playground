@@ -310,7 +310,8 @@ namespace Cobalt {
 		}
 
 		private Gee.ArrayQueue<ServiceDiscovery> service_discoveries = new Gee.ArrayQueue<ServiceDiscovery> ();
-		private Gee.ArrayQueue<CharacteristicDiscovery> characteristic_discoveries = new Gee.ArrayQueue<CharacteristicDiscovery> ();
+		private Gee.HashMap<void *, CharacteristicDiscovery> characteristic_discoveries = new Gee.HashMap<void *, CharacteristicDiscovery> ();
+		private Gee.HashMap<void *, DescriptorDiscovery> descriptor_discoveries = new Gee.HashMap<void *, DescriptorDiscovery> ();
 
 		public Peripheral (PeripheralManager manager) {
 			Object (manager: manager);
@@ -332,7 +333,7 @@ namespace Cobalt {
 			return yield discovery.future.wait_async ();
 		}
 
-		private void process_next_service_discovery_request () {
+		private void process_next_service_discovery () {
 			var discovery = service_discoveries.peek_head ();
 			if (discovery != null)
 				process_service_discovery_request (discovery);
@@ -349,7 +350,7 @@ namespace Cobalt {
 				var discovery = service_discoveries.poll_head ();
 				discovery.resolve (services);
 
-				process_next_service_discovery_request ();
+				process_next_service_discovery ();
 			});
 		}
 
@@ -358,128 +359,64 @@ namespace Cobalt {
 				var discovery = service_discoveries.poll_head ();
 				discovery.reject (new IOError.FAILED ("%s", error_description));
 
-				process_next_service_discovery_request ();
+				process_next_service_discovery ();
 			});
 		}
 
-		private class ServiceDiscovery : AttributeDiscovery<Gee.ArrayList<Service>> {
-			public ServiceDiscovery (string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
-				Object (
-					uuids: uuids,
-					cancellable: cancellable,
-					manager: manager
-				);
-			}
-		}
+		internal void process_characteristic_discovery (CharacteristicDiscovery discovery) {
+			var service = discovery.service;
 
-		internal async Gee.ArrayList<Characteristic> discover_characteristics (Service service, string[]? uuids, Cancellable? cancellable) throws Error {
-			var discovery = new CharacteristicDiscovery (service, uuids, cancellable, manager);
-			characteristic_discoveries.offer_tail (discovery);
+			characteristic_discoveries[service.handle] = discovery;
 
-			if (characteristic_discoveries.peek_head () == discovery)
-				process_characteristic_discovery_request (discovery);
-
-			return yield discovery.future.wait_async ();
-		}
-
-		private void process_next_characteristic_discovery_request () {
-			var discovery = characteristic_discoveries.peek_head ();
-			if (discovery != null)
-				process_characteristic_discovery_request (discovery);
-		}
-
-		private void process_characteristic_discovery_request (CharacteristicDiscovery discovery) {
-			_start_characteristic_discovery (discovery.service, discovery.uuids);
+			_start_characteristic_discovery (service, discovery.uuids);
 		}
 
 		public extern void _start_characteristic_discovery (Service service, string[]? uuids);
 
-		public void _on_characteristic_discovery_success (owned Gee.ArrayList<Characteristic> characteristics) {
+		public void _on_characteristic_discovery_success (void* service_impl, owned Gee.ArrayList<Characteristic> characteristics) {
 			manager.schedule (() => {
-				var discovery = characteristic_discoveries.poll_head ();
-				discovery.resolve (characteristics);
-
-				process_next_characteristic_discovery_request ();
+				CharacteristicDiscovery discovery;
+				if (characteristic_discoveries.unset (service_impl, out discovery)) {
+					discovery.resolve (characteristics);
+				}
 			});
 		}
 
-		public void _on_characteristic_discovery_failure (string error_description) {
+		public void _on_characteristic_discovery_failure (void* service_impl, string error_description) {
 			manager.schedule (() => {
-				var discovery = characteristic_discoveries.poll_head ();
-				discovery.reject (new IOError.FAILED ("%s", error_description));
-
-				process_next_characteristic_discovery_request ();
+				CharacteristicDiscovery discovery;
+				if (characteristic_discoveries.unset (service_impl, out discovery)) {
+					discovery.reject (new IOError.FAILED ("%s", error_description));
+				}
 			});
 		}
 
-		private class CharacteristicDiscovery : AttributeDiscovery<Gee.ArrayList<Characteristic>> {
-			public Service service {
-				get;
-				construct;
-			}
+		internal void process_descriptor_discovery (DescriptorDiscovery discovery) {
+			var characteristic = discovery.characteristic;
 
-			public CharacteristicDiscovery (Service service, string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
-				Object (
-					service: service,
-					uuids: uuids,
-					cancellable: cancellable,
-					manager: manager
-				);
-			}
+			descriptor_discoveries[characteristic.handle] = discovery;
+
+			_start_descriptor_discovery (characteristic);
 		}
 
-		private class AttributeDiscovery<T> : Object {
-			public string[]? uuids {
-				get;
-				construct;
-			}
+		public extern void _start_descriptor_discovery (Characteristic characteristic);
 
-			public Cancellable? cancellable {
-				get;
-				construct;
-			}
-
-			public Gee.Future<T> future {
-				get {
-					return promise.future;
+		public void _on_descriptor_discovery_success (void* characteristic_impl, owned Gee.ArrayList<Descriptor> descriptors) {
+			manager.schedule (() => {
+				DescriptorDiscovery discovery;
+				if (descriptor_discoveries.unset (characteristic_impl, out discovery)) {
+					discovery.resolve (descriptors);
 				}
-			}
+			});
+		}
 
-			public PeripheralManager manager {
-				get;
-				construct;
-			}
-
-			private Gee.Promise<T> promise;
-
-			private ulong cancel_handler = 0;
-
-			construct {
-				promise = new Gee.Promise<T> ();
-
-				if (cancellable != null) {
-					cancel_handler = cancellable.connect (() => {
-						manager.schedule (() => {
-							if (!promise.future.ready) {
-								promise.set_exception (new IOError.CANCELLED ("Cancelled"));
-							}
-						});
-					});
+		public void _on_descriptor_discovery_failure (void* characteristic_impl, string error_description) {
+			manager.schedule (() => {
+				DescriptorDiscovery discovery;
+				if (descriptor_discoveries.unset (characteristic_impl, out discovery)) {
+					discovery.reject (new IOError.FAILED ("%s", error_description));
 				}
-			}
-
-			~AttributeDiscovery () {
-				if (cancellable != null)
-					cancellable.disconnect (cancel_handler);
-			}
-
-			public void resolve (T val) {
-				promise.set_value (val);
-			}
-
-			public void reject (Error error) {
-				promise.set_exception (error);
-			}
+			});
 		}
 	}
 
@@ -507,6 +444,8 @@ namespace Cobalt {
 			construct;
 		}
 
+		private Gee.ArrayQueue<CharacteristicDiscovery> characteristic_discoveries = new Gee.ArrayQueue<CharacteristicDiscovery> ();
+
 		public Service (void* handle, string uuid, Peripheral peripheral) {
 			Object (
 				handle: handle,
@@ -516,16 +455,173 @@ namespace Cobalt {
 		}
 
 		public async Gee.ArrayList<Characteristic> discover_characteristics (string[]? uuids = null, Cancellable? cancellable = null) throws Error {
-			return yield peripheral.discover_characteristics (this, uuids, cancellable);
+			var discovery = new CharacteristicDiscovery (this, uuids, cancellable);
+			characteristic_discoveries.offer_tail (discovery);
+
+			discovery.completed.connect (() => {
+				characteristic_discoveries.poll_head ();
+				process_next_characteristic_discovery ();
+			});
+
+			if (characteristic_discoveries.peek_head () == discovery)
+				peripheral.process_characteristic_discovery (discovery);
+
+			return yield discovery.future.wait_async ();
+		}
+
+		private void process_next_characteristic_discovery () {
+			var discovery = characteristic_discoveries.peek_head ();
+			if (discovery != null)
+				peripheral.process_characteristic_discovery (discovery);
 		}
 	}
 
 	public class Characteristic : Attribute {
-		public Characteristic (void* handle, string uuid) {
+		public Peripheral peripheral {
+			get;
+			construct;
+		}
+
+		private Gee.ArrayQueue<DescriptorDiscovery> descriptor_discoveries = new Gee.ArrayQueue<DescriptorDiscovery> ();
+
+		public Characteristic (void* handle, string uuid, Peripheral peripheral) {
+			Object (
+				handle: handle,
+				uuid: uuid,
+				peripheral: peripheral
+			);
+		}
+
+		public async Gee.ArrayList<Descriptor> discover_descriptors (Cancellable? cancellable = null) throws Error {
+			var discovery = new DescriptorDiscovery (this, cancellable);
+			descriptor_discoveries.offer_tail (discovery);
+
+			discovery.completed.connect (() => {
+				descriptor_discoveries.poll_head ();
+				process_next_descriptor_discovery ();
+			});
+
+			if (descriptor_discoveries.peek_head () == discovery)
+				peripheral.process_descriptor_discovery (discovery);
+
+			return yield discovery.future.wait_async ();
+		}
+
+		private void process_next_descriptor_discovery () {
+			var discovery = descriptor_discoveries.peek_head ();
+			if (discovery != null)
+				peripheral.process_descriptor_discovery (discovery);
+		}
+	}
+
+	public class Descriptor : Attribute {
+		public Descriptor (void* handle, string uuid) {
 			Object (
 				handle: handle,
 				uuid: uuid
 			);
+		}
+	}
+
+	private class ServiceDiscovery : AttributeDiscovery<Gee.ArrayList<Service>> {
+		public ServiceDiscovery (string[]? uuids, Cancellable? cancellable, PeripheralManager manager) {
+			Object (
+				uuids: uuids,
+				cancellable: cancellable,
+				manager: manager
+			);
+		}
+	}
+
+	private class CharacteristicDiscovery : AttributeDiscovery<Gee.ArrayList<Characteristic>> {
+		public Service service {
+			get;
+			construct;
+		}
+
+		public CharacteristicDiscovery (Service service, string[]? uuids, Cancellable? cancellable) {
+			Object (
+				service: service,
+				uuids: uuids,
+				cancellable: cancellable,
+				manager: service.peripheral.manager
+			);
+		}
+	}
+
+	private class DescriptorDiscovery : AttributeDiscovery<Gee.ArrayList<Descriptor>> {
+		public Characteristic characteristic {
+			get;
+			construct;
+		}
+
+		public DescriptorDiscovery (Characteristic characteristic, Cancellable? cancellable) {
+			Object (
+				characteristic: characteristic,
+				cancellable: cancellable,
+				manager: characteristic.peripheral.manager
+			);
+		}
+	}
+
+	private class AttributeDiscovery<T> : Object {
+		public string[]? uuids {
+			get;
+			construct;
+		}
+
+		public Cancellable? cancellable {
+			get;
+			construct;
+		}
+
+		public Gee.Future<T> future {
+			get {
+				return promise.future;
+			}
+		}
+
+		public PeripheralManager manager {
+			get;
+			construct;
+		}
+
+		public signal void completed ();
+
+		private Gee.Promise<T> promise;
+
+		private ulong cancel_handler = 0;
+
+		construct {
+			promise = new Gee.Promise<T> ();
+
+			if (cancellable != null) {
+				cancel_handler = cancellable.connect (() => {
+					manager.schedule (() => {
+						if (!promise.future.ready)
+							promise.set_exception (new IOError.CANCELLED ("Cancelled"));
+					});
+				});
+			}
+		}
+
+		~AttributeDiscovery () {
+			if (cancellable != null)
+				cancellable.disconnect (cancel_handler);
+		}
+
+		public void resolve (T val) {
+			if (!promise.future.ready)
+				promise.set_value (val);
+
+			completed ();
+		}
+
+		public void reject (Error error) {
+			if (!promise.future.ready)
+				promise.set_exception (error);
+
+			completed ();
 		}
 	}
 }

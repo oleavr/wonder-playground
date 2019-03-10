@@ -182,6 +182,10 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
                      forService:service];
 }
 
+- (void)startDescriptorDiscovery:(CBCharacteristic *)characteristic {
+  [impl discoverDescriptorsForCharacteristic:characteristic];
+}
+
 -  (void)peripheral:(CBPeripheral *)peripheral
 didDiscoverServices:(NSError *)error {
   if (error == nil) {
@@ -211,13 +215,33 @@ didDiscoverCharacteristicsForService:(CBService *)service
 
     for (CBCharacteristic *handle in service.characteristics) {
       const gchar *uuid = handle.UUID.UUIDString.UTF8String;
-      CobaltCharacteristic *characteristic = cobalt_characteristic_new((__bridge_retained gpointer) handle, uuid);
+      CobaltCharacteristic *characteristic = cobalt_characteristic_new((__bridge_retained gpointer) handle, uuid, wrapper);
       gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(characteristics), characteristic);
     }
 
-    _cobalt_peripheral_on_characteristic_discovery_success(wrapper, characteristics);
+    _cobalt_peripheral_on_characteristic_discovery_success(wrapper, (__bridge gpointer) service, characteristics);
   } else {
-    _cobalt_peripheral_on_characteristic_discovery_failure(wrapper, error.localizedDescription.UTF8String);
+    _cobalt_peripheral_on_characteristic_discovery_failure(wrapper, (__bridge gpointer) service, error.localizedDescription.UTF8String);
+  }
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral
+didDiscoverDescriptorsForCharacteristic:(CBCharacteristic *)characteristic
+                                  error:(NSError *)error {
+  if (error == nil) {
+    GeeArrayList *descriptors = gee_array_list_new(COBALT_TYPE_DESCRIPTOR,
+        (GBoxedCopyFunc) g_object_ref, (GDestroyNotify) g_object_unref,
+        NULL, NULL, NULL);
+
+    for (CBDescriptor *handle in characteristic.descriptors) {
+      const gchar *uuid = handle.UUID.UUIDString.UTF8String;
+      CobaltDescriptor *descriptor = cobalt_descriptor_new((__bridge_retained gpointer) handle, uuid);
+      gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(descriptors), descriptor);
+    }
+
+    _cobalt_peripheral_on_descriptor_discovery_success(wrapper, (__bridge gpointer) characteristic, descriptors);
+  } else {
+    _cobalt_peripheral_on_descriptor_discovery_failure(wrapper, (__bridge gpointer) characteristic, error.localizedDescription.UTF8String);
   }
 }
 
@@ -250,6 +274,18 @@ void _cobalt_peripheral_start_characteristic_discovery(CobaltPeripheral *wrapper
     dispatch_async(dispatch_get_main_queue(), ^{
         [peripheralHandle startCharacteristicDiscovery:uuidValues
                                             forService:service];
+    });
+  }
+}
+
+void _cobalt_peripheral_start_descriptor_discovery(CobaltPeripheral *wrapper, CobaltCharacteristic *characteristicWrapper) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    CBCharacteristic *characteristic = (__bridge CBCharacteristic *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(characteristicWrapper));
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [peripheralHandle startDescriptorDiscovery:characteristic];
     });
   }
 }

@@ -79,6 +79,14 @@ namespace WonderPlayground {
 					foreach (var characteristic in characteristics) {
 						print ("\tcharacteristics[%u]: \"%s\"\n", characteristic_index, characteristic.uuid);
 
+						var descriptors = yield characteristic.discover_descriptors ();
+						uint descriptors_index = 0;
+						foreach (var descriptor in descriptors) {
+							print ("\t\tdescriptors[%u]: \"%s\"\n", descriptors_index, descriptor.uuid);
+
+							descriptors_index++;
+						}
+
 						characteristic_index++;
 					}
 
