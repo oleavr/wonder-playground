@@ -318,6 +318,7 @@ namespace Cobalt {
 		private Gee.HashMap<void *, DescriptorDiscovery> descriptor_discoveries = new Gee.HashMap<void *, DescriptorDiscovery> ();
 		private Gee.HashMap<void *, CharacteristicReadRequest> characteristic_reads = new Gee.HashMap<void *, CharacteristicReadRequest> ();
 		private Gee.HashMap<void *, CharacteristicWriteRequest> characteristic_writes = new Gee.HashMap<void *, CharacteristicWriteRequest> ();
+		private Gee.HashMap<void *, DescriptorReadRequest> descriptor_reads = new Gee.HashMap<void *, DescriptorReadRequest> ();
 
 		public Peripheral (PeripheralManager manager) {
 			Object (manager: manager);
@@ -502,6 +503,28 @@ namespace Cobalt {
 				}
 			});
 		}
+
+		internal void process_descriptor_read_request (DescriptorReadRequest request) {
+			var descriptor = request.descriptor;
+
+			descriptor_reads[descriptor.handle] = request;
+
+			_start_descriptor_read (descriptor);
+		}
+
+		public extern void _start_descriptor_read (Descriptor descriptor);
+
+		public void _on_descriptor_value_updated (void* descriptor_impl, owned string? val, string? error_description) {
+			manager.schedule (() => {
+				DescriptorReadRequest request;
+				if (descriptor_reads.unset (descriptor_impl, out request)) {
+					if (error_description == null)
+						request.resolve (val);
+					else
+						request.reject (new IOError.FAILED ("%s", error_description));
+				}
+			});
+		}
 	}
 
 	public abstract class Attribute : Object {
@@ -670,11 +693,40 @@ namespace Cobalt {
 	}
 
 	public class Descriptor : Attribute {
-		public Descriptor (void* handle, string uuid) {
+		public Peripheral peripheral {
+			get;
+			construct;
+		}
+
+		private Gee.ArrayQueue<DescriptorReadRequest> read_requests = new Gee.ArrayQueue<DescriptorReadRequest> ();
+
+		public Descriptor (void* handle, string uuid, Peripheral peripheral) {
 			Object (
 				handle: handle,
-				uuid: uuid
+				uuid: uuid,
+				peripheral: peripheral
 			);
+		}
+
+		public async string read_value (Cancellable? cancellable = null) throws Error {
+			var request = new DescriptorReadRequest (this, cancellable);
+			read_requests.offer_tail (request);
+
+			request.completed.connect (() => {
+				read_requests.poll_head ();
+				process_next_read_request ();
+			});
+
+			if (read_requests.peek_head () == request)
+				peripheral.process_descriptor_read_request (request);
+
+			return yield request.wait_async ();
+		}
+
+		private void process_next_read_request () {
+			var request = read_requests.peek_head ();
+			if (request != null)
+				peripheral.process_descriptor_read_request (request);
 		}
 	}
 
@@ -773,6 +825,21 @@ namespace Cobalt {
 				write_type: write_type,
 				cancellable: cancellable,
 				manager: characteristic.peripheral.manager
+			);
+		}
+	}
+
+	private class DescriptorReadRequest : Request<string> {
+		public Descriptor descriptor {
+			get;
+			construct;
+		}
+
+		public DescriptorReadRequest (Descriptor descriptor, Cancellable? cancellable) {
+			Object (
+				descriptor: descriptor,
+				cancellable: cancellable,
+				manager: descriptor.peripheral.manager
 			);
 		}
 	}

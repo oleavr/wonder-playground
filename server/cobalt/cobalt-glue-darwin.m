@@ -208,6 +208,10 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
   }
 }
 
+- (void)startDescriptorRead:(CBDescriptor *)descriptor {
+  [impl readValueForDescriptor:descriptor];
+}
+
 -  (void)peripheral:(CBPeripheral *)peripheral
 didDiscoverServices:(NSError *)error {
   if (error == nil) {
@@ -277,7 +281,7 @@ didDiscoverDescriptorsForCharacteristic:(CBCharacteristic *)characteristic
 
     for (CBDescriptor *handle in characteristic.descriptors) {
       const gchar *uuid = handle.UUID.UUIDString.UTF8String;
-      CobaltDescriptor *descriptor = cobalt_descriptor_new((__bridge_retained gpointer) handle, uuid);
+      CobaltDescriptor *descriptor = cobalt_descriptor_new((__bridge_retained gpointer) handle, uuid, wrapper);
       gee_abstract_collection_add(GEE_ABSTRACT_COLLECTION(descriptors), descriptor);
     }
 
@@ -301,11 +305,21 @@ didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
 - (void)peripheral:(CBPeripheral *)peripheral
 didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
                          error:(NSError *)error {
-  NSLog(@"didWriteValueForCharacteristic error=%@", error);
   if (error == nil) {
     _cobalt_peripheral_on_characteristic_value_write_success(wrapper, (__bridge gpointer) characteristic);
   } else {
     _cobalt_peripheral_on_characteristic_value_write_failure(wrapper, (__bridge gpointer) characteristic, error.localizedDescription.UTF8String);
+  }
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral
+didUpdateValueForDescriptor:(CBDescriptor *)descriptor
+                      error:(NSError *)error {
+  if (error == nil) {
+    NSString *desc = ((NSObject *) descriptor.value).description;
+    _cobalt_peripheral_on_descriptor_value_updated(wrapper, (__bridge gpointer) descriptor, g_strdup(desc.UTF8String), NULL);
+  } else {
+    _cobalt_peripheral_on_descriptor_value_updated(wrapper, (__bridge gpointer) descriptor, NULL, error.localizedDescription.UTF8String);
   }
 }
 
@@ -394,6 +408,18 @@ void _cobalt_peripheral_start_characteristic_write(CobaltPeripheral *wrapper, Co
       [peripheralHandle startCharacteristicWrite:characteristic
                                            value:data
                                             type:(CBCharacteristicWriteType) write_type];
+    });
+  }
+}
+
+void _cobalt_peripheral_start_descriptor_read(CobaltPeripheral *wrapper, CobaltDescriptor *descriptorWrapper) {
+  @autoreleasepool {
+    CobaltPeripheralHandle *peripheralHandle = (__bridge CobaltPeripheralHandle *) wrapper->handle;
+
+    CBDescriptor *descriptor = (__bridge CBDescriptor *) cobalt_attribute_get_handle(COBALT_ATTRIBUTE(descriptorWrapper));
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [peripheralHandle startDescriptorRead:descriptor];
     });
   }
 }

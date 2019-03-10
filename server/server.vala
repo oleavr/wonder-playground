@@ -114,6 +114,13 @@ namespace WonderPlayground {
 						foreach (var descriptor in descriptors) {
 							print ("\t\tdescriptors[%u]: \"%s\"\n", descriptors_index, descriptor.uuid);
 
+							try {
+								var val = yield descriptor.read_value ();
+								print ("\t\t\tvalue: %s\n", val);
+							} catch (Error e) {
+								print ("\t\t\t(unable to read value: \"%s\")\n", e.message);
+							}
+
 							descriptors_index++;
 						}
 
