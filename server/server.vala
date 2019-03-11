@@ -35,6 +35,11 @@ namespace WonderPlayground {
 
 		private Cobalt.PeripheralManager peripheral_manager = new Cobalt.PeripheralManager ();
 
+		private const string SERVICE_UUID_DASH_DOT = "AF237777-879D-6186-1F49-DECA0E85D9C1";
+		private const string SERVICE_UUID_CUE = "AF237778-879D-6186-1F49-DECA0E85D9C1";
+
+		private const string CHARACTERISTIC_UUID_COMMAND = "AF230002-879D-6186-1F49-DECA0E85D9C1";
+
 		construct {
 			web_server.add_websocket_handler ("/session", null, null, on_websocket_connected);
 		}
@@ -57,91 +62,64 @@ namespace WonderPlayground {
 			try {
 				web_server.listen_all (1337, 0);
 
-				var peripheral = yield peripheral_manager.get_first_matching (new string[] {
-					"AF237777-879D-6186-1F49-DECA0E85D9C1",
-					"AF237778-879D-6186-1F49-DECA0E85D9C1",
-				}, -1, cancellable);
-				print ("found peripheral: %p, connecting...\n", peripheral);
+				var supported_services = new string[] {
+					SERVICE_UUID_DASH_DOT,
+					SERVICE_UUID_CUE,
+				};
+
+				var peripheral = yield peripheral_manager.get_first_matching (supported_services, -1, cancellable);
+				print ("Found peripheral: identifier=\"%s\" name=\"%s\", connecting...\n", peripheral.identifier, peripheral.name);
 
 				yield peripheral.establish_connection ();
+				print ("Connected!\n");
 
-				print ("connected!\n");
+				var services = yield peripheral.discover_services (supported_services, cancellable);
+				var service = services[0];
+				print ("It's a %s!\n", (service.uuid == SERVICE_UUID_DASH_DOT) ? "Dash/Dot" : "Cue");
 
-				var services = yield peripheral.discover_services (new string[] {
-					"AF237777-879D-6186-1F49-DECA0E85D9C1",
-					"AF237778-879D-6186-1F49-DECA0E85D9C1",
-				}, cancellable);
-				uint service_index = 0;
-				foreach (var service in services) {
-					print ("services[%u]: \"%s\"\n", service_index, service.uuid);
+				var characteristics = yield service.discover_characteristics (null, cancellable);
+				uint characteristic_index = 0;
+				foreach (var characteristic in characteristics) {
+					print ("\tcharacteristics[%u]: \"%s\"\n", characteristic_index, characteristic.uuid);
 
-					var included_services = yield service.discover_included_services (null, cancellable);
-					uint included_index = 0;
-					foreach (var included_service in included_services) {
-						print ("\tincluded_services[%u]: \"%s\"\n", included_index, included_service.uuid);
+					print ("\t\tproperties: %s\n", characteristic.properties.to_string ());
 
-						included_index++;
+					try {
+						var val = yield characteristic.read_value ();
+						print ("\t\tvalue: %u bytes\n", (uint) val.get_size ());
+					} catch (Error e) {
+						print ("\t\t(unable to read value: \"%s\")\n", e.message);
 					}
 
-					var characteristics = yield service.discover_characteristics (null, cancellable);
-					uint characteristic_index = 0;
-					foreach (var characteristic in characteristics) {
-						print ("\tcharacteristics[%u]: \"%s\"\n", characteristic_index, characteristic.uuid);
+					/*
+					characteristic.notify["value"].connect ((sender, pspec) => {
+						Cobalt.Characteristic c = sender as Cobalt.Characteristic;
+						print ("*** characteristic %s changed: %s\n", c.uuid, hexdump (characteristic.value));
+					});
 
-						print ("\t\tproperties: %s\n", characteristic.properties.to_string ());
+					try {
+						yield characteristic.set_notify_value (true);
+						print ("\t\tenabled value notifications\n");
+					} catch (Error e) {
+						print ("\t\t(unable to enable value notifications: \"%s\")\n", e.message);
+					}
+					*/
 
+					if (characteristic.uuid == CHARACTERISTIC_UUID_COMMAND) {
 						try {
-							var val = yield characteristic.read_value ();
-							print ("\t\tvalue: %u bytes\n", (uint) val.get_size ());
+							var val = new Bytes (new uint8[] {
+								0x03, 0xff, 0x00, 0x00, 0x0b, 0xff, 0x00, 0x00,
+								0x0c, 0xff, 0x00, 0x00, 0x30, 0xff, 0x00, 0x00,
+							});
+							print ("\t\t(writing %u bytes)\n", (uint) val.get_size ());
+							yield characteristic.write_value (val, WITHOUT_RESPONSE, cancellable);
+							print ("\t\t(wrote %u bytes)\n", (uint) val.get_size ());
 						} catch (Error e) {
-							print ("\t\t(unable to read value: \"%s\")\n", e.message);
+							print ("\t\t(unable to write value: \"%s\")\n", e.message);
 						}
-
-						characteristic.notify["value"].connect ((sender, pspec) => {
-							Cobalt.Characteristic c = sender as Cobalt.Characteristic;
-							print ("*** characteristic %s changed: %s\n", c.uuid, hexdump (characteristic.value));
-						});
-
-						try {
-							yield characteristic.set_notify_value (true);
-							print ("\t\tenabled value notifications\n");
-						} catch (Error e) {
-							print ("\t\t(unable to enable value notifications: \"%s\")\n", e.message);
-						}
-
-						if (characteristic.uuid == "AF230002-879D-6186-1F49-DECA0E85D9C1") {
-							try {
-								var val = new Bytes (new uint8[] {
-									0x03, 0xff, 0x00, 0x00, 0x0b, 0xff, 0x00, 0x00,
-									0x0c, 0xff, 0x00, 0x00, 0x30, 0xff, 0x00, 0x00,
-								});
-								print ("\t\t(writing %u bytes)\n", (uint) val.get_size ());
-								yield characteristic.write_value (val, WITHOUT_RESPONSE, cancellable);
-								print ("\t\t(wrote %u bytes)\n", (uint) val.get_size ());
-							} catch (Error e) {
-								print ("\t\t(unable to write value: \"%s\")\n", e.message);
-							}
-						}
-
-						var descriptors = yield characteristic.discover_descriptors ();
-						uint descriptors_index = 0;
-						foreach (var descriptor in descriptors) {
-							print ("\t\tdescriptors[%u]: \"%s\"\n", descriptors_index, descriptor.uuid);
-
-							try {
-								var val = yield descriptor.read_value ();
-								print ("\t\t\tvalue: %s\n", val);
-							} catch (Error e) {
-								print ("\t\t\t(unable to read value: \"%s\")\n", e.message);
-							}
-
-							descriptors_index++;
-						}
-
-						characteristic_index++;
 					}
 
-					service_index++;
+					characteristic_index++;
 				}
 
 				started = true;
