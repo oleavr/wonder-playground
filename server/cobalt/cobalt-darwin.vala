@@ -301,6 +301,16 @@ namespace Cobalt {
 	public class Peripheral : Object {
 		protected void* handle;
 
+		public string identifier {
+			get;
+			construct;
+		}
+
+		public string name {
+			get;
+			construct;
+		}
+
 		public PeripheralManager manager {
 			get;
 			construct;
@@ -323,8 +333,12 @@ namespace Cobalt {
 
 		private Gee.HashMap<void *, Characteristic> characteristic_value_subscriptions = new Gee.HashMap<void *, Characteristic> ();
 
-		public Peripheral (PeripheralManager manager) {
-			Object (manager: manager);
+		public Peripheral (string identifier, string name, PeripheralManager manager) {
+			Object (
+				identifier: identifier,
+				name: name,
+				manager: manager
+			);
 		}
 
 		public extern void* _get_implementation ();

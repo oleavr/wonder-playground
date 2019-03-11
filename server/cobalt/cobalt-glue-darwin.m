@@ -161,7 +161,7 @@ void _cobalt_peripheral_manager_cancel_peripheral_connection(CobaltPeripheralMan
   self = [super init];
 
   if (self != nil) {
-    wrapper = cobalt_peripheral_new(manager);
+    wrapper = cobalt_peripheral_new(theImpl.identifier.UUIDString.UTF8String, theImpl.name.UTF8String, manager);
     impl = theImpl;
 
     wrapper->handle = (__bridge_retained gpointer) self;
