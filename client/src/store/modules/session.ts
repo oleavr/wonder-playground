@@ -1,6 +1,6 @@
 import { RootState } from "../types";
 
-import { ActionTree, MutationTree, Module } from "vuex";
+import { ActionTree, MutationTree, Module, ActionContext } from "vuex";
 import WebSocketAsPromised from "websocket-as-promised";
 
 const namespaced: boolean = true;
@@ -41,7 +41,7 @@ export const getters: GetterTree<SessionState, RootState> = {
 
 export const actions: ActionTree<SessionState, RootState> = {
     async connect({ commit }): Promise<void> {
-        const wsp = new WebSocketAsPromised("ws://192.168.1.14:27040/session", {
+        const wsp = new WebSocketAsPromised("ws://127.0.0.1:1337/session", {
             packMessage: data => JSON.stringify(data),
             unpackMessage: message => JSON.parse(message as string)
         });
@@ -67,8 +67,44 @@ export const actions: ActionTree<SessionState, RootState> = {
         } catch (e) {
             commit("socketError", new Error("Unable to connect to server"));
         }
+    },
+
+    async turnLeft(store: ActionContext<SessionState, RootState>): Promise<void> {
+        const {socket} = store.state;
+        if (socket === null) {
+            return;
+        }
+
+        const degrees = 120;
+        const timeMs = 1000;
+
+        let rawDegrees = degrees * 628 / 360;
+        let byte7 = 0x00;
+        if (rawDegrees < 0) {
+            rawDegrees += 0x400;
+            byte7 = 0xc0;
+        }
+
+        const byte4 = timeMs & 0xff;
+        const byte5 = timeMs >>> 8;
+
+        const byte3 = rawDegrees & 0xff;
+        const byte6 = (rawDegrees >>> 10) << 6;
+
+        const packet = new Uint8Array([
+            0x23, 0x00, 0x00, byte3, byte4, byte5, byte6, byte7
+        ]);
+        socket.send(packet);
     }
-};
+}
+
+        /*
+        const packet = new Uint8Array([
+            0x03, 0xff, 0x00, 0x00, 0x0b, 0xff, 0x00, 0x00,
+            0x0c, 0xff, 0x00, 0x00, 0x30, 0xff, 0x00, 0x00,
+        ]);
+        */
+
 
 export const mutations: MutationTree<SessionState> = {
     socketConnected(state, socket: WebSocketAsPromised) {

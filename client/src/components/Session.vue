@@ -5,6 +5,7 @@
                 <Timeline :timeline="timeline"></Timeline>
             </li>
         </ul>
+        <button v-on:click="turnLeft">Turn left</button>
         <h3 v-if="session.error">Oops: {{ session.error.message }}</h3>
     </div>
 </template>
@@ -26,9 +27,10 @@ const namespace: string = "session";
 export default class Session extends Vue {
     @State("session") session!: SessionState;
     @Action("connect", { namespace }) connect!: () => Promise<void>;
+    @Action("turnLeft", { namespace }) turnLeft!: () => Promise<void>;
     @Getter("timelines", { namespace }) timelines!: SessionTimeline[];
 
-    mounted() {
+    mounted(): void {
         this.connect();
     }
 }

@@ -35,10 +35,14 @@ namespace WonderPlayground {
 
 		private Cobalt.PeripheralManager peripheral_manager = new Cobalt.PeripheralManager ();
 
+		private Cobalt.Characteristic command_pipe;
+
 		private const string SERVICE_UUID_DASH_DOT = "AF237777-879D-6186-1F49-DECA0E85D9C1";
 		private const string SERVICE_UUID_CUE = "AF237778-879D-6186-1F49-DECA0E85D9C1";
 
 		private const string CHARACTERISTIC_UUID_COMMAND = "AF230002-879D-6186-1F49-DECA0E85D9C1";
+		private const string CHARACTERISTIC_UUID_SENSOR1 = "AF230006-879D-6186-1F49-DECA0E85D9C1";
+		private const string CHARACTERISTIC_UUID_SENSOR2 = "AF230003-879D-6186-1F49-DECA0E85D9C1";
 
 		construct {
 			web_server.add_websocket_handler ("/session", null, null, on_websocket_connected);
@@ -75,7 +79,7 @@ namespace WonderPlayground {
 
 				var services = yield peripheral.discover_services (supported_services, cancellable);
 				var service = services[0];
-				print ("It's a %s!\n", (service.uuid == SERVICE_UUID_DASH_DOT) ? "Dash/Dot" : "Cue");
+				print ("It's a %s!\n", (service.uuid == SERVICE_UUID_DASH_DOT) ? "dash/dot" : "cue");
 
 				var characteristics = yield service.discover_characteristics (null, cancellable);
 				uint characteristic_index = 0;
@@ -84,40 +88,31 @@ namespace WonderPlayground {
 
 					print ("\t\tproperties: %s\n", characteristic.properties.to_string ());
 
-					try {
-						var val = yield characteristic.read_value ();
-						print ("\t\tvalue: %u bytes\n", (uint) val.get_size ());
-					} catch (Error e) {
-						print ("\t\t(unable to read value: \"%s\")\n", e.message);
+					if (characteristic.uuid == CHARACTERISTIC_UUID_COMMAND) {
+						command_pipe = characteristic;
 					}
 
 					/*
-					characteristic.notify["value"].connect ((sender, pspec) => {
-						Cobalt.Characteristic c = sender as Cobalt.Characteristic;
-						print ("*** characteristic %s changed: %s\n", c.uuid, hexdump (characteristic.value));
-					});
+					if (characteristic.uuid == CHARACTERISTIC_UUID_SENSOR1) {
+						characteristic.notify["value"].connect ((sender, pspec) => {
+							Cobalt.Characteristic c = sender as Cobalt.Characteristic;
+							//print ("*** characteristic %s changed: %s\n", c.uuid, hexdump (characteristic.value));
 
-					try {
-						yield characteristic.set_notify_value (true);
-						print ("\t\tenabled value notifications\n");
-					} catch (Error e) {
-						print ("\t\t(unable to enable value notifications: \"%s\")\n", e.message);
-					}
-					*/
+							var data = characteristic.value.get_data ();
+							uint8 left_distance = data[7];
+							uint8 right_distance = data[6];
+							uint8 rear_distance = data[8];
+							print ("left=%u right=%u rear=%u\n", left_distance, right_distance, rear_distance);
+						});
 
-					if (characteristic.uuid == CHARACTERISTIC_UUID_COMMAND) {
 						try {
-							var val = new Bytes (new uint8[] {
-								0x03, 0xff, 0x00, 0x00, 0x0b, 0xff, 0x00, 0x00,
-								0x0c, 0xff, 0x00, 0x00, 0x30, 0xff, 0x00, 0x00,
-							});
-							print ("\t\t(writing %u bytes)\n", (uint) val.get_size ());
-							yield characteristic.write_value (val, WITHOUT_RESPONSE, cancellable);
-							print ("\t\t(wrote %u bytes)\n", (uint) val.get_size ());
+							yield characteristic.set_notify_value (true);
+							print ("\t\tenabled value notifications\n");
 						} catch (Error e) {
-							print ("\t\t(unable to write value: \"%s\")\n", e.message);
+							print ("\t\t(unable to enable value notifications: \"%s\")\n", e.message);
 						}
 					}
+					*/
 
 					characteristic_index++;
 				}
@@ -151,6 +146,7 @@ namespace WonderPlayground {
 
 		private void on_websocket_connected (Soup.Server server, Soup.WebsocketConnection connection, string path, Soup.ClientContext client) {
 			connection.closed.connect (on_websocket_disconnected);
+			connection.message.connect (on_websocket_message);
 
 			websocket_connections.add (connection);
 
@@ -161,8 +157,21 @@ namespace WonderPlayground {
 			websocket_connections.remove (connection);
 		}
 
+		private void on_websocket_message (int type, Bytes message) {
+			if (type == Soup.WebsocketDataType.BINARY) {
+				command_pipe.write_value.begin (message, WITHOUT_RESPONSE, cancellable);
+			}
+		}
+
 		private void send_sync_to (Soup.WebsocketConnection connection) {
 			var builder = begin_message ("sync");
+
+			builder
+				.begin_object ()
+				.set_member_name ("timelines")
+				.begin_array ()
+				.end_array ()
+				.end_object ();
 
 			string message = end_message (builder);
 			connection.send_text (message);
