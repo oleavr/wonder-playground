@@ -16,7 +16,7 @@ endif
 
 cobalt = static_library('cobalt', cobalt_sources,
   vala_args: vala_flags,
-  objc_args: ['-fobjc-arc'],
+  objc_args: ['-fobjc-arc', '-mmacosx-version-min=10.13'],
   dependencies: [glib_dep, gio_dep, gee_dep],
 )
 cobalt_dep = declare_dependency(
