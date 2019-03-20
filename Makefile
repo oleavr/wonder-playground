@@ -19,5 +19,8 @@ app: build/build.ninja server/server.vala server/server-glue-darwin.m server/cob
 test: app
 	./build/server/wonder-playground-server
 
-.PHONY: all app test
+clean:
+	rm -rf build/
+
+.PHONY: all app test clean
 .SECONDARY:
